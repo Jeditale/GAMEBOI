@@ -156,24 +156,36 @@ public class CPU {
             case 0x02: { mmu.write(getBC(), a); pc++; cycles = 2; break; } // LD (BC), A
             case 0x12: { mmu.write(getDE(), a); pc++; cycles = 2; break; } // LD (DE), A
             case 0xC1: { c = mmu.read(sp++); b = mmu.read(sp++); pc++; cycles = 3; break; } // POP BC
-            case 0xC5: { mmu.write(--sp, b); mmu.write(--sp, c); pc++; cycles = 4; break; } // PUSH BC
+            case 0xC5: { mmu.write(--sp, b); mmu.write(--sp, c); pc++; cycles = 4; break; } // PUSH BC - Correct order is high (B), then low (C)
             case 0xD1: { e = mmu.read(sp++); d = mmu.read(sp++); pc++; cycles = 3; break; } // POP DE
-            case 0xD5: { mmu.write(--sp, d); mmu.write(--sp, e); pc++; cycles = 4; break; } // PUSH DE
+            case 0xD5: { mmu.write(--sp, d); mmu.write(--sp, e); pc++; cycles = 4; break; } // PUSH DE - Correct order is high (D), then low (E)
             case 0xE1: { l = mmu.read(sp++); h = mmu.read(sp++); pc++; cycles = 3; break; } // POP HL
-            case 0xE5: { mmu.write(--sp, h); mmu.write(--sp, l); pc++; cycles = 4; break; } // PUSH HL
+            case 0xE5: { mmu.write(--sp, h); mmu.write(--sp, l); pc++; cycles = 4; break; } // PUSH HL - Correct order is high (H), then low (L)
 
             // --- Arithmetic ---
             case 0x80: { add(b); pc++; cycles = 1; break; }
             case 0x81: { add(c); pc++; cycles = 1; break; }
             case 0x87: { add(a); pc++; cycles = 1; break; }
             case 0x90: { sub(b); pc++; cycles = 1; break; }
-            case 0xA0: { a &= b; f = (a == 0) ? 0xB0 : 0x20; pc++; cycles = 1; break; } // AND B
+            case 0x89: { // ADC A, C
+                int val = c;
+                int carry = (f & 0x10) != 0 ? 1 : 0;
+                int result = a + val + carry;
+                f = ((result & 0xFF) == 0 ? 0x80 : 0) | (result > 0xFF ? 0x10 : 0) | (((a & 0x0F) + (val & 0x0F) + carry) > 0x0F ? 0x20 : 0);
+                a = result & 0xFF;
+                pc++; cycles = 1; break;
+            }
+            case 0xA0: { a &= b; f = (a == 0) ? 0x80 : 0x00 | 0x20; pc++; cycles = 1; break; } // AND B
             case 0xA8: { a ^= b; f = (a == 0) ? 0x80 : 0x00; pc++; cycles = 1; break; } // XOR B
             case 0xAF: { a = 0; f = 0x80; pc++; cycles = 1; break; } // XOR A
             case 0xB0: { a |= b; f = (a == 0) ? 0x80 : 0x00; pc++; cycles = 1; break; } // OR B
             case 0xB8: { cp(b); pc++; cycles = 1; break; } // CP B
             case 0xFE: { cp(mmu.read(pc + 1)); pc += 2; cycles = 2; break; } // CP d8
             case 0x03: { setBC((getBC() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC BC
+            case 0x1B: { // DEC DE
+                setDE((getDE() - 1) & 0xFFFF);
+                pc++; cycles = 2; break;
+            }
             case 0x13: { setDE((getDE() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC DE
             case 0x23: { setHL((getHL() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC HL
             case 0x0C: { // INC C
@@ -240,14 +252,36 @@ public class CPU {
                 else { pc += 2; cycles = 2; }
                 break;
             }
+            case 0xC2: { // JP NZ, a16
+                int addr = (mmu.read(pc + 2) << 8) | mmu.read(pc + 1);
+                if ((f & 0x80) == 0) { // If Z is NOT set
+                    pc = addr;
+                    cycles = 4; // Taken
+                } else {
+                    pc += 3;
+                    cycles = 3; // Not taken
+                }
+                break;
+            }
+            case 0xCA: { // JP Z, a16
+                int addr = (mmu.read(pc + 2) << 8) | mmu.read(pc + 1);
+                if ((f & 0x80) != 0) { // If Z is set
+                    pc = addr;
+                    cycles = 4; // Taken
+                } else {
+                    pc += 3;
+                    cycles = 3; // Not taken
+                }
+                break;
+            }
 
             // --- Misc ---
             case 0xCB: {
                 pc++; // Prefix
                 int cb = mmu.read(pc);
                 pc++; // Opcode
+                // Cycles are now handled inside executeCB
                 executeCB(cb);
-                cycles = ((cb & 0x0F)==6 || (cb & 0x0F)==0xE) ? 4 : 2;
                 break;
             }
             case 0xF3: { IME = false; pc++; cycles = 1; break; } // DI
@@ -278,6 +312,10 @@ public class CPU {
                 a = mmu.read(getHL());
                 setHL((getHL() + 1) & 0xFFFF);
                 pc++; cycles = 2; break;
+            }
+            case 0xBC: { // CP H
+                cp(h);
+                pc++; cycles = 1; break;
             }
             case 0x57: { // LD D, A
                 d = a;
@@ -482,37 +520,6 @@ public class CPU {
                 f = (a == 0 ? 0x80 : 0) | 0x20;
                 pc++; cycles = 1; break;
             }
-            case 0x27: { // DAA (Decimal Adjust Accumulator)
-                int correction = 0;
-                boolean carry = (f & 0x10) != 0; // Check current Carry Flag
-
-                if ((f & 0x20) != 0 || (a & 0x0F) > 9) { // Check H-Flag or if lower nibble is > 9
-                    correction |= 0x06;
-                }
-                if (carry || a > 0x99) { // Check C-Flag or if A > 0x99
-                    correction |= 0x60;
-                    f |= 0x10; // Set Carry Flag if overflow
-                }
-
-                if ((f & 0x40) == 0) { // If it was an ADD operation (N=0)
-                    a = (a + correction) & 0xFF;
-                } else { // If it was a SUB operation (N=1)
-                    a = (a - correction) & 0xFF;
-                }
-
-                // Final Flags: Z based on new A, N preserved, H cleared, C preserved/set
-                f &= 0x40 | 0x10; // Preserve N and C (if set above)
-                if (a == 0) f |= 0x80; // Set Z if result is zero
-                // H-Flag is always cleared by DAA
-
-                pc++; cycles = 1; break;
-            }
-            case 0x07: { // RLCA (Rotate Left Accumulator)
-                int bit7 = (a & 0x80) >> 7;
-                a = (a << 1) & 0xFF | bit7;
-                f = (bit7 != 0 ? 0x10 : 0); // Only C flag set by old bit 7. Z, N, H cleared.
-                pc++; cycles = 1; break;
-            }
             case 0x2D: { // DEC L
                 l = (l - 1) & 0xFF;
                 f = (f & 0x10) | 0x40 | ((l == 0) ? 0x80 : 0) | (((l & 0x0F) == 0x0F) ? 0x20 : 0);
@@ -709,8 +716,16 @@ public class CPU {
                 l = e;
                 pc++; cycles = 1; break;
             }
+            case 0x68: { // LD L, B
+                l = b;
+                pc++; cycles = 1; break;
+            }
             case 0x6A: { // LD L, D
                 l = d;
+                pc++; cycles = 1; break;
+            }
+            case 0x6C: { // LD L, H
+                l = h;
                 pc++; cycles = 1; break;
             }
             case 0xDC: { // CALL C, a16 (Call if Carry is SET)
@@ -761,19 +776,10 @@ public class CPU {
             }
 
             case 0x9F: { // SBC A, A (Subtract A from A + Carry)
-                int val = getRegisterValue(opcode);; // The value is A itself
                 int carry = (f & 0x10) != 0 ? 1 : 0;
-                int result = a - val - carry; // Result is always 0 - Carry
-
-                // Flags: Z, N=1, H, C
-                f = 0x40; // Start with N=1 (Subtraction)
-                if ((result & 0xFF) == 0) f |= 0x80;
-                if (result < 0) f |= 0x10; // Set C (borrow)
-
-                // H Flag: Set if borrow from bit 4
-                if (((a & 0x0F) - (val & 0x0F) - carry) < 0) f |= 0x20;
-
-                a = result & 0xFF;
+                a = (0 - carry) & 0xFF; // Result is either 0 or 0xFF
+                // Flags: Z=1 if carry was 0, N=1, H=1 if carry was 1, C=1 if carry was 1
+                f = 0x40 | (carry == 0 ? 0x80 : 0) | (carry != 0 ? 0x20 : 0) | (carry != 0 ? 0x10 : 0);
                 pc++;
                 cycles = 1;
                 break;
@@ -827,21 +833,19 @@ public class CPU {
                 break;
             }
 
-            case 0x37: { // SWAP A
+            case 0x37: { // SCF (Set Carry Flag)
                 f &= 0x90; // Clear N and H flags
                 f |= 0x10; // Set C flag
-                pc++;
-                cycles = 1;
-                break;
+                pc++; cycles = 1; break;
             }
             case 0xF5: { // PUSH AF
-                mmu.write(--sp, a); // High byte (A)
-                mmu.write(--sp, f); // Low byte (F - flags)
+                mmu.write(--sp, a);
+                mmu.write(--sp, f & 0xF0); // Low byte (F - flags), lower 4 bits are not pushed
                 pc++; cycles = 4; break;
             }
             case 0xF1: { // POP AF
-                f = mmu.read(sp++) & 0xF0; // Low byte (F - flags)
-                a = mmu.read(sp++); // High byte (A)
+                f = mmu.read(sp++) & 0xF0; // Low byte (F), lower 4 bits are read as 0
+                a = mmu.read(sp++);
                 pc++; cycles = 3; break;
             }
             case 0xFA: { // LD A, (a16) (Load A from full 16-bit address)
@@ -894,6 +898,13 @@ public class CPU {
                 cycles = 4; // 16 T-cycles (4 M-cycles)
                 break;
             }
+            case 0xF6: { // OR d8
+                int n = mmu.read(pc + 1);
+                a |= n;
+                f = (a == 0 ? 0x80 : 0);
+                pc += 2; cycles = 2;
+                break;
+            }
             case 0xD2: { // JP NC, a16
                 int addr = (mmu.read(pc + 2) << 8) | mmu.read(pc + 1);
 
@@ -918,157 +929,133 @@ public class CPU {
     }
 
     private void executeCB(int cb) {
-        // Note: NO pc++ HERE!
-        switch (cb) {
-            case 0x11: { // RL C
-                int oldC = (f & 0x10) >> 4;
-                int bit7 = (c & 0x80) >> 7;
-                c = ((c << 1) | oldC) & 0xFF;
-                f = (c == 0 ? 0x80 : 0) | (bit7 << 4);
-                break;
-            }
-            case 0x17: { // RL A
-                int oldC = (f & 0x10) >> 4;
-                int bit7 = (a & 0x80) >> 7;
-                a = ((a << 1) | oldC) & 0xFF;
-                f = (a == 0 ? 0x80 : 0) | (bit7 << 4);
-                break;
-            }
-            case 0x20: { // SLA B
-                int bit7 = (b & 0x80) >> 7;
-                b = (b << 1) & 0xFF;
-                f = (b == 0 ? 0x80 : 0) | (bit7 << 4);
-                break;
-            }
-            case 0x7C: { // BIT 7, H
-                f = (f & 0x10) | 0x20 | ((h & 0x80) == 0 ? 0x80 : 0);
-                break;
-            }
-            case 0x7E: { // BIT 7, (HL)
-                int val = mmu.read(getHL());
-                // Check bit 7. Z=1 if bit is 0. N=0, H=1.
-                f = (f & 0x10) | 0x20 | ((val & 0x80) == 0 ? 0x80 : 0);
-                break;
-            }
+        int regCode = cb & 0x07;
+        int bit = (cb >> 3) & 0x07;
+        int operation = cb >> 6;
 
-            case 0xBE: { // RES 7, (HL) - Reset bit 7 to 0
-                int addr = getHL();
-                int val = mmu.read(addr);
-                val &= ~(0x80); // Clear bit 7
-                mmu.write(addr, val);
-                break;
-            }
-            case 0x19: { // RR C (Rotate Right through Carry)
-                int oldC = (f & 0x10) >> 4;
-                int bit0 = c & 0x01;
-                c = (c >> 1) | (oldC << 7);
-                // Flags: Z, N=0, H=0. C = old bit 0.
-                f = (c == 0 ? 0x80 : 0) | (bit0 << 4);
-                break;
-            }
-            case 0x38: { // SWAP B (Swap nibbles of B)
-                int upper = (b >> 4) & 0x0F;
-                int lower = (b & 0x0F) << 4;
-                b = upper | lower;
-                // Flags: Z set if zero. N=0, H=0, C=0.
-                f = (b == 0 ? 0x80 : 0);
-                break;
-            }
-            case 0x7A: { // BIT 7, D
-                f = (f & 0x10) | 0x20 | ((d & 0x80) == 0 ? 0x80 : 0);
-                break;
-            }
-            case 0x7B: { // BIT 7, E
-                f = (f & 0x10) | 0x20 | ((e & 0x80) == 0 ? 0x80 : 0);
-                break;
-            }
-            case 0x1B: { // RR C (Rotate Right through Carry)
-                int oldC = (f & 0x10) >> 4;
-                int bit0 = c & 0x01;
-                c = (c >> 1) | (oldC << 7);
-                f = (c == 0 ? 0x80 : 0) | (bit0 << 4); // Z, N=0, H=0. C = old bit 0.
-                break;
-            }
-            case 0x23: { // SLA E (Shift Left Arithmetic E)
-                int bit7 = (e & 0x80) >> 7;
-                e = (e << 1) & 0xFF;
-                f = (e == 0 ? 0x80 : 0) | (bit7 << 4); // Z set if 0. N=0, H=0. C=old bit 7.
-                break;
-            }
-            case 0x3A: { // SWAP D (Swap nibbles of D)
-                int upper = (d >> 4) & 0x0F;
-                int lower = (d & 0x0F) << 4;
-                d = upper | lower;
-                f = (d == 0 ? 0x80 : 0); // Z set if zero. N=0, H=0, C=0.
-                break;
-            }
+        int val = getRegisterValueCB(regCode);
+        int result = val;
 
+        cycles = (regCode == 6) ? 4 : 2; // (HL) operations take 16 T-cycles, others take 8.
 
-            // --- SET instructions (Set bit to 1) ---
-            case 0xCE: { // SET 1, (HL)
-                int addr = getHL();
-                mmu.write(addr, mmu.read(addr) | 0x02);
+        switch (operation) {
+            case 0: // Rotates and Shifts
+                switch (bit) {
+                    case 0: result = rlc(val); break; // RLC
+                    case 1: result = rrc(val); break; // RRC
+                    case 2: result = rl(val); break;  // RL
+                    case 3: result = rr(val); break;  // RR
+                    case 4: result = sla(val); break; // SLA
+                    case 5: result = sra(val); break; // SRA
+                    case 6: result = swap(val); break;// SWAP
+                    case 7: result = srl(val); break; // SRL
+                }
                 break;
-            }
-            case 0xE6: { // SET 4, (HL)
-                int addr = getHL();
-                mmu.write(addr, mmu.read(addr) | 0x10);
+            case 1: // BIT
+                // BIT is special, it doesn't write a result back, just sets flags.
+                f = (f & 0x10) | 0x20; // Preserve C, set H=1, clear N=0
+                if ((val & (1 << bit)) == 0) {
+                    f |= 0x80; // Set Z if bit is 0
+                }
+                // No need to write back, so we return early.
+                if (regCode == 6) cycles = 3; // BIT (HL) is 12 cycles
+                return;
+            case 2: // RES
+                result = val & ~(1 << bit);
                 break;
-            }
-            case 0xF6: { // SET 6, (HL)
-                int addr = getHL();
-                mmu.write(addr, mmu.read(addr) | 0x40);
+            case 3: // SET
+                result = val | (1 << bit);
                 break;
-            }
-            case 0xFE: { // SET 7, (HL)
-                int addr = getHL();
-                mmu.write(addr, mmu.read(addr) | 0x80);
-                break;
-            }
-            case 0x37: { // SWAP A
-                int upper = (a >> 4) & 0x0F;
-                int lower = (a & 0x0F) << 4;
-                a = upper | lower;
-                // Flags: Z set if zero. N=0, H=0, C=0.
-                f = (a == 0 ? 0x80 : 0);
-                break;
-            }
-            // --- RESET (RES) Instructions ---
-            // These instructions clear the specified bit (force to 0)
-            case 0x8E: // RES 1, (HL)
-            case 0x96: // RES 2, (HL)
-            case 0x9E: // RES 3, (HL)
-            case 0xA6: // RES 4, (HL)
-            case 0xAE: // RES 5, (HL)
-            case 0xB6: { // RES 6, (HL)
-                int bit = (cb >> 3) & 0x07; // Extracts the bit position (0 through 6)
-                int addr = getHL();
-                int val = mmu.read(addr);
-                val &= ~(1 << bit); // Clear the bit
-                mmu.write(addr, val);
-                break;
-            }
+        }
 
-            // --- SET Instructions ---
-            // These instructions set the specified bit (force to 1)
-            case 0xD6: // SET 2, (HL)
-            case 0xDE: // SET 3, (HL)
-            case 0xEE: { // SET 5, (HL)
-                int bit = (cb >> 3) & 0x07; // Extracts the bit position (2, 3, or 5)
-                int addr = getHL();
-                int val = mmu.read(addr);
-                val |= (1 << bit); // Set the bit
-                mmu.write(addr, val);
-                break;
-            }
+        setRegisterValueCB(regCode, result);
+    }
 
-            case 0xC6: { // SET 0, B - Set Bit 0 of Register B
-                b |= 0x01; // Set bit 0
-                break;
-            }
-            default:
-                System.err.printf("Unknown CB opcode: 0x%02X at 0x%04X%n", cb, pc - 2);
-                break;
+    // --- CB Helper Functions ---
+
+    private int rlc(int val) {
+        int carry = (val >> 7) & 1;
+        int result = ((val << 1) | carry) & 0xFF;
+        f = (carry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int rrc(int val) {
+        int carry = val & 1;
+        int result = ((val >> 1) | (carry << 7)) & 0xFF;
+        f = (carry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int rl(int val) {
+        int carry = (f & 0x10) >> 4;
+        int newCarry = (val >> 7) & 1;
+        int result = ((val << 1) | carry) & 0xFF;
+        f = (newCarry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int rr(int val) {
+        int carry = (f & 0x10) >> 4;
+        int newCarry = val & 1;
+        int result = ((val >> 1) | (carry << 7)) & 0xFF;
+        f = (newCarry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int sla(int val) {
+        int carry = (val >> 7) & 1;
+        int result = (val << 1) & 0xFF;
+        f = (carry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int sra(int val) {
+        int carry = val & 1;
+        int msb = val & 0x80;
+        int result = ((val >> 1) | msb) & 0xFF;
+        f = (carry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int srl(int val) {
+        int carry = val & 1;
+        int result = (val >> 1) & 0xFF;
+        f = (carry << 4) | (result == 0 ? 0x80 : 0);
+        return result;
+    }
+
+    private int swap(int val) {
+        int upper = (val >> 4) & 0x0F;
+        int lower = (val & 0x0F) << 4;
+        int result = upper | lower;
+        f = (result == 0 ? 0x80 : 0);
+        return result;
+    }
+    private int getRegisterValueCB(int regCode) {
+        switch (regCode) {
+            case 0: return b;
+            case 1: return c;
+            case 2: return d;
+            case 3: return e;
+            case 4: return h;
+            case 5: return l;
+            case 6:
+                return mmu.read(getHL());
+            case 7: return a;
+            default: return 0; // Should not happen
+        }
+    }
+    private void setRegisterValueCB(int regCode, int value) {
+        switch (regCode) {
+            case 0: b = value; break;
+            case 1: c = value; break;
+            case 2: d = value; break;
+            case 3: e = value; break;
+            case 4: h = value; break;
+            case 5: l = value; break;
+            case 6: mmu.write(getHL(), value); break;
+            case 7: a = value; break;
         }
     }
 
@@ -1122,9 +1109,6 @@ public class CPU {
             isHalted = false;
 
             if (IME) {
-                // Process the interrupt (Jumping to the vector)
-                IME = false; // Disable further interrupts
-
                 // Find the highest priority interrupt (lowest bit number)
                 int vector = 0;
                 int bitMask = 0;
@@ -1134,13 +1118,15 @@ public class CPU {
                 else if ((pending & 0x04) != 0) { vector = 0x0050; bitMask = 0x04; } // Timer
                 else if ((pending & 0x08) != 0) { vector = 0x0058; bitMask = 0x08; } // Serial
                 else if ((pending & 0x10) != 0) { vector = 0x0060; bitMask = 0x10; } // Joypad
-                else { return; }
-                // Clear the specific interrupt flag that was triggered
+                
+                if (vector == 0) return; // Should not happen if pending is not 0
+
                 IME = false;
+                // Clear the specific interrupt flag that is being handled
+                mmu.write(0xFF0F, requested & ~bitMask);
+
                 mmu.write(--sp, (pc >> 8) & 0xFF);
                 mmu.write(--sp, pc & 0xFF);
-
-                mmu.write(0xFF0F, requested & ~bitMask);
 
                 // Jump to interrupt vector
                 pc = vector;

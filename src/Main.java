@@ -18,7 +18,7 @@ public class Main {
         CARTRIDGE cartridge = new CARTRIDGE();
         JOYPAD joypad = new JOYPAD();
         // 1. Load the TEST ROM (Ensure this file is in your folder!)
-        cartridge.loadROM("ROMS/dmg-acid2.gb");
+        cartridge.loadROM("ROMS/Tetris (World) (Rev A).gb");
 
         cpu.fetchMMU(mmu);
         mmu.fetchPPU(ppu);
@@ -42,9 +42,10 @@ public class Main {
         while (true) {
             int cycles = cpu.step();
 
-            for (int i = 0; i < cycles; i++) {
-                ppu.cycle();
-            }
+//            for (int i = 0; i < cycles; i++) {
+//
+//            }
+            ppu.cycle(cycles);
             mmu.timer_tick(cycles);
 
             // --- DIAGNOSTIC CHECK: Run this once per frame (very fast) ---

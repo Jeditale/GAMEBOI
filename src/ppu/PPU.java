@@ -76,7 +76,12 @@ public class PPU {
      * This is the main PPU tick function. It gets called for every CPU T-cycle.
      */
     // Corrected PPU.cycle() Structure (Only the essential logic remains)
-    public void cycle() {
+    public void cycle(int cycles) {
+        for (int i = 0; i < cycles; i++) {
+            tick();
+        }
+    }
+    private void tick() {
         if (!isLcdEnabled()) {
             // If LCD is off, reset state and do nothing.
             cycle = 0;
@@ -188,8 +193,7 @@ public class PPU {
             if (signedTileIndex) {
                 // Handle signed tile indexing (8800-97FF method)
                 // Convert unsigned tileNum (0-255) to a signed byte (-128 to 127)
-                int signedTileNum = (tileNum > 127) ? (tileNum - 256) : tileNum;
-                tileAddr = dataBase + (signedTileNum * 16);
+                tileAddr = dataBase + ((byte)tileNum * 16);
             } else {
                 // Handle unsigned tile indexing (8000-8FFF method)
                 tileAddr = dataBase + (tileNum * 16);

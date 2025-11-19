@@ -165,6 +165,10 @@ public class CPU {
             // --- Arithmetic ---
             case 0x80: { add(b); pc++; cycles = 1; break; }
             case 0x81: { add(c); pc++; cycles = 1; break; }
+            case 0x85: { // ADD A, L
+                add(l);
+                pc++; cycles = 1; break;
+            }
             case 0x87: { add(a); pc++; cycles = 1; break; }
             case 0x90: { sub(b); pc++; cycles = 1; break; }
             case 0x89: { // ADC A, C
@@ -181,6 +185,10 @@ public class CPU {
             case 0xB0: { a |= b; f = (a == 0) ? 0x80 : 0x00; pc++; cycles = 1; break; } // OR B
             case 0xB8: { cp(b); pc++; cycles = 1; break; } // CP B
             case 0xFE: { cp(mmu.read(pc + 1)); pc += 2; cycles = 2; break; } // CP d8
+            case 0xB9: { // CP C
+                cp(c);
+                pc++; cycles = 1; break;
+            }
             case 0x03: { setBC((getBC() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC BC
             case 0x1B: { // DEC DE
                 setDE((getDE() - 1) & 0xFFFF);
@@ -246,6 +254,7 @@ public class CPU {
                 else { pc += 2; cycles = 2; }
                 break;
             }
+
             case 0x28: { // JR Z, r8
                 int n = mmu.read(pc + 1); if (n > 127) n -= 256;
                 if ((f & 0x80) != 0) { pc += 2 + n; cycles = 3; }
@@ -538,6 +547,10 @@ public class CPU {
                 b = mmu.read(getHL());
                 pc++; cycles = 2; break;
             }
+            case 0x4E: { // LD C, (HL)
+                c = mmu.read(getHL());
+                pc++; cycles = 2; break;
+            }
             case 0x6E: { // LD L, (HL)
                 l = mmu.read(getHL());
                 pc++; cycles = 2; break;
@@ -549,6 +562,15 @@ public class CPU {
             case 0x71: { // LD (HL), C
                 mmu.write(getHL(), c);
                 pc++; cycles = 2; break;
+            }
+            case 0x72: { // LD (HL), D
+                mmu.write(getHL(), d);
+                pc++; cycles = 2; break;
+            }
+            case 0xB7: { // OR A
+                // a |= a; // This is a NOP for the value
+                f = (a == 0 ? 0x80 : 0); // Z set if zero. N=0, H=0, C=0.
+                pc++; cycles = 1; break;
             }
             case 0x96: { // SUB (HL)
                 sub(mmu.read(getHL()));
@@ -676,14 +698,18 @@ public class CPU {
                 pc++; cycles = 1; break;
             }
             // --- New Load/Store Instructions ---
-            case 0x08: { // LD (a16), SP
+            case 0x61: { // LD H, C
+                h = c;
+                pc++; cycles = 1; break;
+            }
+            case 0x08: { // LD (a16), SP 
                 int addr = (mmu.read(pc + 2) << 8) | mmu.read(pc + 1);
                 mmu.write(addr, sp & 0xFF);         // Write Low Byte of SP
                 mmu.write(addr + 1, (sp >> 8) & 0xFF); // Write High Byte of SP
                 pc += 3; cycles = 5; break; // 20 T-cycles
             }
             case 0x44: { b = h; pc++; cycles = 1; break; } // LD B, H (Assuming you meant LD B, H as the 40-47 range is all LD)
-            case 0x4D: { l = c; pc++; cycles = 1; break; } // LD L, C
+            case 0x4D: { c = l; pc++; cycles = 1; break; } // LD C, L
             case 0x50: { d = b; pc++; cycles = 1; break; } // LD D, B
             case 0x54: { d = h; pc++; cycles = 1; break; } // LD D, H
             case 0x59: { e = c; pc++; cycles = 1; break; } // LD E, C
@@ -712,12 +738,46 @@ public class CPU {
                 h = e;
                 pc++; cycles = 1; break;
             }
+            case 0x65: { // LD H, L
+                h = l;
+                pc++; cycles = 1; break;
+            }
+            case 0x60: { // LD H, B
+                h = b;
+                pc++; cycles = 1; break;
+            }
+            case 0x27: { // DAA (Decimal Adjust Accumulator)
+                int result = a;
+                int correction = 0;
+                boolean wasSub = (f & 0x40) != 0;
+                boolean carry = (f & 0x10) != 0;
+
+                if ((f & 0x20) != 0 || (!wasSub && (result & 0x0F) > 9)) {
+                    correction |= 0x06;
+                }
+                if (carry || (!wasSub && result > 0x99)) {
+                    correction |= 0x60;
+                    f |= 0x10; // Set carry flag
+                }
+
+                result += wasSub ? -correction : correction;
+                a = result & 0xFF;
+
+                // Flags: Z is set if result is 0. H is cleared. N is not affected. C is set/preserved.
+                f &= 0x50; // Preserve N and C, clear Z and H
+                if (a == 0) f |= 0x80;
+                pc++; cycles = 1; break;
+            }
             case 0x6B: { // LD L, E
                 l = e;
                 pc++; cycles = 1; break;
             }
             case 0x68: { // LD L, B
                 l = b;
+                pc++; cycles = 1; break;
+            }
+            case 0x69: { // LD L, C
+                l = c;
                 pc++; cycles = 1; break;
             }
             case 0x6A: { // LD L, D
@@ -775,11 +835,36 @@ public class CPU {
                 pc++; cycles = 1; break;
             }
 
+            case 0x07: { // RLCA
+                int bit7 = (a & 0x80) >> 7;
+                a = ((a << 1) | bit7) & 0xFF;
+                f = (bit7 != 0 ? 0x10 : 0); // Z=0, N=0, H=0. C = old bit 7.
+                pc++; cycles = 1; break;
+            }
+
             case 0x9F: { // SBC A, A (Subtract A from A + Carry)
                 int carry = (f & 0x10) != 0 ? 1 : 0;
                 a = (0 - carry) & 0xFF; // Result is either 0 or 0xFF
                 // Flags: Z=1 if carry was 0, N=1, H=1 if carry was 1, C=1 if carry was 1
                 f = 0x40 | (carry == 0 ? 0x80 : 0) | (carry != 0 ? 0x20 : 0) | (carry != 0 ? 0x10 : 0);
+                pc++;
+                cycles = 1;
+                break;
+            }
+            case 0x99: { // SBC A, C
+                int val = c;
+                int carry = (f & 0x10) != 0 ? 1 : 0;
+                int result = a - val - carry;
+
+                // Flags: Z, N=1, H, C
+                f = 0x40; // Start with N=1 (Subtraction)
+                if ((result & 0xFF) == 0) f |= 0x80;
+                if (result < 0) f |= 0x10; // Set C (borrow)
+
+                // H Flag: Set if borrow from bit 4
+                if (((a & 0x0F) - (val & 0x0F) - carry) < 0) f |= 0x20;
+
+                a = result & 0xFF;
                 pc++;
                 cycles = 1;
                 break;

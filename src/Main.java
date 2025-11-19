@@ -25,6 +25,7 @@ public class Main {
         mmu.fetchCartridge(cartridge);
         ppu.fetchMMU(mmu);
 
+        joypad.fetchMMU(mmu);
         mmu.fetchJoypad(joypad);
 
         display.addKeyListener(joypad);
@@ -39,33 +40,27 @@ public class Main {
 
         System.out.println("Emulator started (Boot ROM Bypassed)...");
 
+        // The Game Boy CPU runs at 4.194304 MHz.
+        // A full frame (154 scanlines * 456 cycles/scanline) takes 70224 cycles.
+        final int CYCLES_PER_FRAME = 70224;
+
         while (true) {
-            int cycles = cpu.step();
+            int cyclesThisFrame = 0;
 
-//            for (int i = 0; i < cycles; i++) {
-//
-//            }
-            ppu.cycle(cycles);
-            mmu.timer_tick(cycles);
+            while (cyclesThisFrame < CYCLES_PER_FRAME) {
+                int cycles = cpu.step();
+                ppu.cycle(cycles);
+                mmu.timer_tick(cycles);
+                cyclesThisFrame += cycles;
+            }
 
-            // --- DIAGNOSTIC CHECK: Run this once per frame (very fast) ---
-            if (ppu.ly == 143) {
-                // This block runs when the CPU is just about to enter V-Blank
-                int ifFlag = mmu.read(0xFF0F);
-                System.out.printf("DIAGNOSTIC: LY=143. IF Register (0xFF0F): 0x%02X\n", ifFlag);
-            }
-            if (ppu.ly > 153) {
-                // This indicates the PPU should have wrapped around to 0
-                System.out.println("DIAGNOSTIC: Error - LY exceeded 153!");
-            }
-            if (ppu.isFrameReady()) {
-                display.render(ppu.getScreen());
-                ppu.clearFrameReadyFlag();
-                try {
-                    Thread.sleep(16);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+            // This loop ensures we've completed a full frame's worth of work.
+            // Now we can render it.
+            display.render(ppu.getScreen());
+            try {
+                Thread.sleep(16); // Sleep to target ~60 FPS
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
         }
     }

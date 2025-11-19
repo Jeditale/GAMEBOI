@@ -1,9 +1,13 @@
 package IO;
 
+import manager.MMU;
+
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 
 public class JOYPAD implements KeyListener {
+
+    private MMU mmu;
 
     // 0 = Pressed, 1 = Released (Game Boy logic is inverted!)
     private int actionButtons = 0x0F; // Start, Select, B, A (Lower 4 bits)
@@ -11,6 +15,9 @@ public class JOYPAD implements KeyListener {
 
     // This holds the value the CPU wrote to 0xFF00 to select which row to read
     private int joypadReg = 0xFF;
+    public void fetchMMU(MMU mmu) {
+        this.mmu = mmu;
+    }
 
     /**
      * CPU writes to 0xFF00 to select which buttons it wants to read.
@@ -46,21 +53,27 @@ public class JOYPAD implements KeyListener {
 
     @Override
     public void keyPressed(KeyEvent e) {
-        updateState(e.getKeyCode(), false); // false = pressed (0)
+        updateState(e, false); // false = pressed (0)
     }
 
     @Override
     public void keyReleased(KeyEvent e) {
-        updateState(e.getKeyCode(), true); // true = released (1)
+        updateState(e, true); // true = released (1)
     }
 
-    private void updateState(int keyCode, boolean isReleased) {
-        int bit = isReleased ? 1 : 0;
+    private void updateState(KeyEvent e, boolean isReleased) {
+        int keyCode = e.getKeyCode();
         int mask;
 
         // Mapping:
-        // Z=A, X=B, Enter=Start, Space=Select
+        // Z=A, X=B, Enter=Start, Right Shift=Select
         // Arrows = D-Pad
+
+        // If a button is pressed (isReleased == false), request an interrupt.
+        if (!isReleased && mmu != null) {
+            int if_flag = mmu.read(0xFF0F);
+            mmu.write(0xFF0F, if_flag | 0x10); // Bit 4 is the Joypad interrupt
+        }
 
         switch (keyCode) {
             // Direction Buttons
@@ -90,9 +103,11 @@ public class JOYPAD implements KeyListener {
                 mask = 1 << 1;
                 actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
                 break;
-            case KeyEvent.VK_SPACE: // Select
-                mask = 1 << 2;
-                actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
+            case KeyEvent.VK_SHIFT: // Select (specifically Right Shift)
+                if (e.getKeyLocation() == KeyEvent.KEY_LOCATION_RIGHT) {
+                    mask = 1 << 2;
+                    actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
+                }
                 break;
             case KeyEvent.VK_ENTER: // Start
                 mask = 1 << 3;

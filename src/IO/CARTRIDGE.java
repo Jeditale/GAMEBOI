@@ -37,7 +37,8 @@ public class CARTRIDGE {
             }
             return 0xFF; // RAM disabled returns high impedance
         }
-        return rom[address];
+//        return rom[address];
+        return 0xFF;
     }
 
     public void write(int address, int data) {
@@ -62,6 +63,7 @@ public class CARTRIDGE {
                 externalRam[offset] = data;
             }
         }
+
         else if (address >= 0x4000 && address <= 0x5FFF) {
             // Area 3: RAM Bank Number (0x4000 - 0x5FFF) or High 2 Bits of ROM Bank
             if (bankingMode == 1) {

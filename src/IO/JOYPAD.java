@@ -53,20 +53,20 @@ public class JOYPAD implements KeyListener {
 
     @Override
     public void keyPressed(KeyEvent e) {
-        updateState(e, false); // false = pressed (0)
+        updateState(e.getKeyCode(), false); // false = pressed (0)
     }
 
     @Override
     public void keyReleased(KeyEvent e) {
-        updateState(e, true); // true = released (1)
+        updateState(e.getKeyCode(), true); // true = released (1)
     }
 
-    private void updateState(KeyEvent e, boolean isReleased) {
-        int keyCode = e.getKeyCode();
+    private void updateState(int keyCode, boolean isReleased) {
+        int bit = isReleased ? 1 : 0;
         int mask;
 
         // Mapping:
-        // Z=A, X=B, Enter=Start, Right Shift=Select
+        // Z=A, X=B, Enter=Start, Space=Select
         // Arrows = D-Pad
 
         // If a button is pressed (isReleased == false), request an interrupt.
@@ -103,11 +103,9 @@ public class JOYPAD implements KeyListener {
                 mask = 1 << 1;
                 actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
                 break;
-            case KeyEvent.VK_SHIFT: // Select (specifically Right Shift)
-                if (e.getKeyLocation() == KeyEvent.KEY_LOCATION_RIGHT) {
-                    mask = 1 << 2;
-                    actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
-                }
+            case KeyEvent.VK_SPACE: // Select
+                mask = 1 << 2;
+                actionButtons = isReleased ? (actionButtons | mask) : (actionButtons & ~mask);
                 break;
             case KeyEvent.VK_ENTER: // Start
                 mask = 1 << 3;

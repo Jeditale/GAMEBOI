@@ -87,7 +87,7 @@ public class CPU {
         mmu.write(0xFF49, 0xFF); // OBP1
         mmu.write(0xFF4A, 0x00); // WY
         mmu.write(0xFF4B, 0x00); // WX
-        mmu.write(0xFFFF, 0x00); // IE
+        mmu.write(0xFFFF, 0x17); // 0x01 | 0x04 | 0x10 = 0x15
     }
 
     // --- MAIN STEP FUNCTION ---
@@ -353,6 +353,16 @@ public class CPU {
 
                 a = result & 0xFF;
                 pc += 2; cycles = 2; break;
+            }
+            case 0x82: { // ADD A, D
+                add(d);
+                pc++; cycles = 1; break;
+            }
+            case 0x25: { // DEC H
+                h = (h - 1) & 0xFF;
+                // Flags: Z, N=1, H. C preserved.
+                f = (f & 0x10) | 0x40 | ((h == 0) ? 0x80 : 0) | (((h & 0x0F) == 0x0F) ? 0x20 : 0);
+                pc++; cycles = 1; break;
             }
 
             case 0xDE: { // SBC A, d8 (Subtract with Carry, immediate)
@@ -981,6 +991,13 @@ public class CPU {
                 sp = (sp + n) & 0xFFFF; // Apply the addition
                 pc += 2;
                 cycles = 4; // 16 T-cycles (4 M-cycles)
+                break;
+            }
+            case 0xBE: { // CP (HL) (Compare A with value at address HL)
+                int val = mmu.read(getHL());
+                cp(val); // Reuse your existing CP helper
+                pc++;
+                cycles = 2; // 8 T-cycles
                 break;
             }
             case 0xF6: { // OR d8

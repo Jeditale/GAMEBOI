@@ -127,12 +127,6 @@ public class MMU {
             return 0xFF; // Return garbage
         }
 
-        if (address == 0xFF00) {
-            return joypad.read();
-        }
-        if (address >= 0xA000 && address <= 0xBFFF) {
-            return cartridge.read(address);
-        }
 
         // 1. Boot ROM (Only if enabled and in range 0-255)
         if (bootRomEnabled && address < 0x0100) {
@@ -140,11 +134,15 @@ public class MMU {
         }
 
         // 2. Cartridge ROM
-        if (address < 0x8000) {
+        if (address <= 0x7FFF) {
             return cartridge.read(address);
         }
         // 3. VRAM
         if (address >= 0x8000 && address <= 0x9FFF) {
+            // VRAM Lockout: Block access if PPU is in Mode 3 (Drawing)
+            if (ppu.getMode() == 3) {
+                return 0xFF; // CPU reads garbage during lockout
+            }
             return ppu.readVRAM(address);
         }
         // 4. WRAM
@@ -157,30 +155,32 @@ public class MMU {
         }
         // 6. OAM
         if (address >= 0xFE00 && address <= 0xFE9F) {
-            if (ppu.isOamAccessible()) {
-                return ppu.readOAM(address);
+            int mode = ppu.getMode();
+            // OAM Lockout: Block access if PPU is in Mode 2 or Mode 3
+            if (mode == 2 || mode == 3) {
+                return 0xFF; // CPU reads garbage during lockout
             }
-            return 0xFF; // OAM is inaccessible during modes 2 and 3
+            return ppu.readOAM(address);
         }
-        // 7. I/O
-        if (address >= 0xFF40 && address <= 0xFF4B) {
-            return ppu.readRegister(address);
+        // 7. I/O Registers
+        if (address >= 0xFF00 && address <= 0xFF7F) {
+            if (address == 0xFF00) return joypad.read();
+            if (address == 0xFF04) return DIV;
+            if (address == 0xFF05) return TIMA;
+            if (address == 0xFF06) return TMA;
+            if (address == 0xFF07) return TAC;
+            if (address == 0xFF0F) return interruptFlag;
+            if (address >= 0xFF40 && address <= 0xFF4B) {
+                return ppu.readRegister(address);
+            }
+            // Other I/O registers can be added here
         }
-
-        if (address == 0xFF0F) return interruptFlag;
-        if (address == 0xFFFF) return interuptEnable;
+        // 8. HRAM
         if (address >= 0xFF80 && address <= 0xFFFE) {
             return hram[address - 0xFF80];
         }
-        else if (address == 0xFF04) {
-            return DIV;
-        } else if (address == 0xFF05) {
-            return TIMA;
-        } else if (address == 0xFF06) {
-            return TMA;
-        } else if (address == 0xFF07) {
-            return TAC;
-        }
+        // 9. Interrupt Enable Register
+        if (address == 0xFFFF) return interuptEnable;
 
         return 0xFF;
     }

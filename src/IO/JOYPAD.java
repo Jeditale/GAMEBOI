@@ -4,14 +4,17 @@ import manager.MMU;
 
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.Serializable;
 
-public class JOYPAD implements KeyListener {
+public class JOYPAD implements KeyListener , Serializable {
 
     private MMU mmu;
 
     // 0 = Pressed, 1 = Released (Game Boy logic is inverted!)
-    private int actionButtons = 0x0F; // Start, Select, B, A (Lower 4 bits)
-    private int directionButtons = 0x0F; // Down, Up, Left, Right (Lower 4 bits)
+    private transient int actionButtons = 0x0F; // Start, Select, B, A (Lower 4 bits)
+    private transient int directionButtons = 0x0F; // Down, Up, Left, Right (Lower 4 bits)
 
     // This holds the value the CPU wrote to 0xFF00 to select which row to read
     private int joypadReg = 0xFF;
@@ -60,7 +63,14 @@ public class JOYPAD implements KeyListener {
     public void keyReleased(KeyEvent e) {
         updateState(e.getKeyCode(), true); // true = released (1)
     }
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject(); // Read the normal stuff (joypadReg, mmu reference)
 
+        // 3. Manually reset buttons to "Released" (0x0F)
+        // If we don't do this, they default to 0 (which means PRESSED on Game Boy!)
+        this.actionButtons = 0x0F;
+        this.directionButtons = 0x0F;
+    }
     private void updateState(int keyCode, boolean isReleased) {
         int bit = isReleased ? 1 : 0;
         int mask;

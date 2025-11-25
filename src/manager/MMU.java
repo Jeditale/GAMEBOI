@@ -5,7 +5,7 @@ import IO.JOYPAD;
 import cpu.CPU;
 import ppu.PPU;
 
-public class MMU {
+public class MMU implements java.io.Serializable{
     private int[] wram = new int[8192];
     private int[] hram = new int[127];
     private PPU ppu;
@@ -116,7 +116,7 @@ public class MMU {
         if (address < 0x8000) {
             // Writing to ROM area? This is impossible on Game Boy.
             // Usually means SP is 0 or uninitialized.
-            System.out.println(String.format("!!! CRITICAL: ILLEGAL WRITE TO ROM [0x%04X] !!! Data: 0x%02X", address, data));
+//            System.out.println(String.format("!!! CRITICAL: ILLEGAL WRITE TO ROM [0x%04X] !!! Data: 0x%02X", address, data));
         }
         else if (address == 0xFF02) { // Serial Control (SC)
             // If the game writes 0x81 (Start Transfer + Internal Clock)
@@ -143,12 +143,12 @@ public class MMU {
             int source = data << 8;
 
             // --- DMA DEBUG TRAP START ---
-            System.out.println(String.format("!!! DMA TRIGGERED !!! Source: 0x%04X", source));
+//            System.out.println(String.format("!!! DMA TRIGGERED !!! Source: 0x%04X", source));
 
             // Check what is actually in WRAM at the source
             // Tetris normally uses 0xC000. Let's peek at the first sprite's Y coordinate.
             int firstByte = this.dmaRead(source);
-            System.out.println(String.format(" -> WRAM[Source] Value: 0x%02X (Should be Y-Coordinate)", firstByte));
+//            System.out.println(String.format(" -> WRAM[Source] Value: 0x%02X (Should be Y-Coordinate)", firstByte));
             // --- DMA DEBUG TRAP END ---
 
             for (int i = 0; i < 160; i++) {
@@ -161,7 +161,7 @@ public class MMU {
             cartridge.write(address, data);
         }
         else if (address == 0xFFFF) {
-            System.out.println(String.format("!!! GAME ENABLED INTERRUPTS (IE) !!! Value: 0x%02X", data));
+//            System.out.println(String.format("!!! GAME ENABLED INTERRUPTS (IE) !!! Value: 0x%02X", data));
             interuptEnable = data;
 
             // --- NEW: CATCH THE CULPRIT ---

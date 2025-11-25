@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-public class CARTRIDGE {
+public class CARTRIDGE implements java.io.Serializable{
     private int[] rom;
     private int romBank = 1;
     private int ramBank = 0;

@@ -2,6 +2,7 @@ package display;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionListener;
 import java.awt.event.KeyListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -27,10 +28,24 @@ public class DISPLAY extends JFrame {
     // This buffer will hold the pixel data to be drawn
     private final BufferedImage image;
 
-    public DISPLAY() {
+    public DISPLAY(ActionListener onSaveState, ActionListener onLoadState) {
         setTitle("GAMEBOI");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setResizable(false);
+
+        JMenuBar menuBar = new JMenuBar();
+        JMenu fileMenu = new JMenu("File");
+
+        JMenuItem saveItem = new JMenuItem("Save State (F5)");
+        saveItem.addActionListener(onSaveState);
+
+        JMenuItem loadItem = new JMenuItem("Load State (F9)");
+        loadItem.addActionListener(onLoadState);
+
+        fileMenu.add(saveItem);
+        fileMenu.add(loadItem);
+        menuBar.add(fileMenu);
+        setJMenuBar(menuBar);
 
         // Create a canvas to draw on
         canvas = new Canvas();

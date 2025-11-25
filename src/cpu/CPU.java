@@ -2,7 +2,7 @@ package cpu;
 
 import manager.MMU;
 
-public class CPU {
+public class CPU implements java.io.Serializable {
     // Registers
     private int a, f, b, c, d, e, h, l;
     private int sp, pc;
@@ -108,7 +108,7 @@ public class CPU {
             return 4;
         }
         if (pc == 0x015A || pc == 0x0158) {
-            System.out.println("Stuck in Loop? PC=" + Integer.toHexString(pc) + " LY=" + mmu.read(0xFF44));
+//            System.out.println("Stuck in Loop? PC=" + Integer.toHexString(pc) + " LY=" + mmu.read(0xFF44));
         }
 
         // 2. Handle Interrupts (Check this BEFORE executing)
@@ -401,7 +401,7 @@ public class CPU {
             }
             case 0xF3: { IME = false; imeScheduled = false; pc++; cycles = 1; break; } // DI - Immediate Disable
             case 0xFB: {
-                System.out.println("!!! EI EXECUTED - MASTER INTERRUPTS ON !!!");
+//                System.out.println("!!! EI EXECUTED - MASTER INTERRUPTS ON !!!");
                 imeScheduled = true;
                 pc++;
                 cycles = 1;
@@ -1415,8 +1415,8 @@ public class CPU {
             // Use a static counter to prevent console flood (define 'debugLogLimit' in class if needed, or just print once)
             // For now, let's just print it. The output will be fast, but readable at the end.
             if (!IME || pending == 0) {
-                System.out.println(String.format("INT IGNORED: IME=%b | IE=0x%02X | IF=0x%02X | Pending=0x%02X",
-                        IME, enabled, requested, pending));
+//                System.out.println(String.format("INT IGNORED: IME=%b | IE=0x%02X | IF=0x%02X | Pending=0x%02X",
+//                        IME, enabled, requested, pending));
             }
         }
 
@@ -1434,7 +1434,7 @@ public class CPU {
                 else if ((pending & 0x10) != 0) { vector = 0x0060; bitMask = 0x10; } // Joypad
 
                 if (vector != 0) {
-                    System.out.println(String.format("!!! INTERRUPT FIRED !!! Vector=0x%04X | PC=0x%04X | SP=0x%04X", vector, pc, sp));
+//                    System.out.println(String.format("!!! INTERRUPT FIRED !!! Vector=0x%04X | PC=0x%04X | SP=0x%04X", vector, pc, sp));
 
                     IME = false;
                     // Ack the interrupt

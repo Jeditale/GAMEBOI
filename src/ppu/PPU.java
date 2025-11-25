@@ -3,9 +3,10 @@ package ppu;
 import cpu.CPU;
 import manager.MMU;
 
+import java.io.Serializable;
 import java.util.Arrays;
 
-public class PPU {
+public class PPU implements java.io.Serializable{
 
     // Main memory bus
     private CPU cpu;
@@ -17,7 +18,7 @@ public class PPU {
 
 
     // Helper class for sorting sprites
-    private static class Sprite {
+    private static class Sprite implements Serializable {
         int y, x, tile, attributes, oamIndex;
 
         Sprite(int y, int x, int tile, int attributes, int oamIndex) {
@@ -335,7 +336,7 @@ public class PPU {
         boolean doDebug = (ly == 72 && (debugFrameCounter % 60 == 0));
 
         if (doDebug) {
-            System.out.println("\n=== OAM HEARTBEAT (Frame " + debugFrameCounter + ") ===");
+//            System.out.println("\n=== OAM HEARTBEAT (Frame " + debugFrameCounter + ") ===");
         }
 
         for (int i = 0; i < 40 && lineSprites.size() < 10; i++) {
@@ -361,14 +362,14 @@ public class PPU {
             } else if (doDebug && rawY != 0 && rawY < 160) {
                 // Log sprites that exist but are just on a different line
                 // This helps prove memory isn't empty
-                System.out.println(String.format("    (Exists) Sprite %d: Y=%d X=%d (Not on Line %d)",
-                        i, yPos, xPos, ly));
+//                System.out.println(String.format("    (Exists) Sprite %d: Y=%d X=%d (Not on Line %d)",
+//                        i, yPos, xPos, ly));
             }
         }
 
         if (doDebug) {
-            if (lineSprites.isEmpty()) System.out.println(" -> NO SPRITES VISIBLE ON LINE " + ly);
-            System.out.println("======================================");
+//            if (lineSprites.isEmpty()) System.out.println(" -> NO SPRITES VISIBLE ON LINE " + ly);
+//            System.out.println("======================================");
         }
 
 
@@ -386,7 +387,7 @@ public class PPU {
         // We iterate in reverse to handle sprite-over-sprite priority correctly (lower X-coordinate wins).
         for (int i = lineSprites.size() - 1; i >= 0; i--) {
             Sprite s = lineSprites.get(i);
-            System.out.println("Drawing Sprite: Y=" + s.y + " X=" + s.x + " Tile=" + s.tile);
+//            System.out.println("Drawing Sprite: Y=" + s.y + " X=" + s.x + " Tile=" + s.tile);
             int line = ly - s.y;
 
             // Handle Y-Flip
@@ -415,7 +416,7 @@ public class PPU {
                 int colorId = ((data2 & mask) != 0 ? 2 : 0) | ((data1 & mask) != 0 ? 1 : 0);
 
                 // Color 0 is transparent for sprites
-                if (colorId != 0) System.out.println("Pixel Found! Color: " + colorId);
+//                if (colorId != 0) System.out.println("Pixel Found! Color: " + colorId);
                 if (colorId == 0) continue;
 
 

@@ -2,13 +2,16 @@ package display;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.KeyListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 
 public class DISPLAY extends JFrame {
 
     private final int SCREEN_WIDTH = 160;
     private final int SCREEN_HEIGHT = 144;
-    private final int SCALE = 4; // You can change this to make the window bigger or smaller
+    private final int SCALE = 3; // Adjusted to 3x for better visibility, change if needed
 
     private final Canvas canvas;
 
@@ -25,13 +28,28 @@ public class DISPLAY extends JFrame {
     private final BufferedImage image;
 
     public DISPLAY() {
-        setTitle("GameBoy Emulator");
+        setTitle("GAMEBOI");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setResizable(false);
 
         // Create a canvas to draw on
         canvas = new Canvas();
         canvas.setPreferredSize(new Dimension(SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE));
+
+        // --- FOCUS FIX START ---
+        canvas.setFocusable(true); // 1. Allow the canvas to accept keyboard input
+        canvas.requestFocus();     // 2. Request focus immediately on startup
+
+        // 3. Add Mouse Listener to reclaim focus when clicked
+        canvas.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                canvas.requestFocusInWindow();
+                System.out.println("Focus reclaimed by Emulator Canvas");
+            }
+        });
+        // --- FOCUS FIX END ---
+
         add(canvas);
         pack(); // Sizes the window to fit the canvas
 
@@ -39,8 +57,15 @@ public class DISPLAY extends JFrame {
         setVisible(true);
 
         // Create an image buffer to draw to.
-        // We'll draw to this image, then scale the image onto the canvas.
         image = new BufferedImage(SCREEN_WIDTH, SCREEN_HEIGHT, BufferedImage.TYPE_INT_RGB);
+    }
+
+    /**
+     * IMPORTANT: Use this method to add your JOYPAD listener.
+     * We attach it to the Canvas, not the JFrame, to ensure it works with the focus fix.
+     */
+    public void addInputListener(KeyListener listener) {
+        canvas.addKeyListener(listener);
     }
 
     /**
@@ -54,10 +79,11 @@ public class DISPLAY extends JFrame {
         // 2. Loop through every pixel and set its color based on the palette
         for (int y = 0; y < SCREEN_HEIGHT; y++) {
             for (int x = 0; x < SCREEN_WIDTH; x++) {
-                // The PPU's screen[y][x] will give a value from 0-3
-                // We use this to pick a color from our palette
-                g.setColor(PALETTE[screenData[y][x]]);
-                g.fillRect(x, y, 1, 1); // Draw a 1x1 pixel
+                // Bounds check to prevent crashes if PPU array size differs
+                if (y < screenData.length && x < screenData[0].length) {
+                    g.setColor(PALETTE[screenData[y][x]]);
+                    g.fillRect(x, y, 1, 1);
+                }
             }
         }
         g.dispose();

@@ -3,6 +3,7 @@ import IO.JOYPAD;
 import cpu.CPU;
 import display.DISPLAY;
 import manager.MMU;
+import ppu.GPUDebugger;
 import ppu.PPU;
 
 import java.io.IOException;
@@ -13,12 +14,13 @@ public class Main {
         CPU cpu = new CPU();
         MMU mmu = new MMU();
         PPU ppu = new PPU();
+        GPUDebugger debugger = new GPUDebugger(ppu);
         mmu.fetchCPU(cpu);
         DISPLAY display = new DISPLAY();
         CARTRIDGE cartridge = new CARTRIDGE();
         JOYPAD joypad = new JOYPAD();
         // 1. Load the TEST ROM (Ensure this file is in your folder!)
-        cartridge.loadROM("ROMS/Tetris (World) (Rev A).gb");
+        cartridge.loadROM("");
 
         cpu.fetchMMU(mmu);
         mmu.fetchPPU(ppu);
@@ -28,8 +30,8 @@ public class Main {
         joypad.fetchMMU(mmu);
         mmu.fetchJoypad(joypad);
 
-        display.addKeyListener(joypad);
-
+//        display.addKeyListener(joypad);
+        display.addInputListener(joypad);
         // 2. Disable the internal Boot ROM logic so we read from the Cartridge immediately
         mmu.setBootRomEnabled(false);
 

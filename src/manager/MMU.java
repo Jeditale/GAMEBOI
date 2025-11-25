@@ -24,6 +24,9 @@ public class MMU {
     private int div_counter = 0; // Internal counter for DIV (resets at 256)
     private int tima_counter = 0; // Internal counter for TIMA (based on TAC frequency)
 
+    // Flag to handle the 1-cycle delay on TIMA overflow
+    private boolean timaOverflowed = false;
+
     public void fetchJoypad(JOYPAD joypad) {
         this.joypad = joypad;
     }
@@ -75,7 +78,10 @@ public class MMU {
         if (address < 0x8000) {
             cartridge.write(address, data);
         } else if (address >= 0x8000 && address <= 0x9FFF) {
-            ppu.writeVRAM(address, data);
+            // VRAM is only accessible when the PPU is not in Mode 3 (Drawing)
+            if (ppu.isVramAccessible()) {
+                ppu.writeVRAM(address, data);
+            }
         } else if (address >= 0xC000 && address <= 0xDFFF) {
             wram[address - 0xC000] = data;
         } else if (address >= 0xE000 && address <= 0xFDFF) {
@@ -93,8 +99,12 @@ public class MMU {
             if (ppu.isOamAccessible()) {
                 ppu.writeOAM(address, data);
             }
+
         } else if (address == 0xFF0F) {
             interruptFlag = data;
+            if ((data & 1) != 0) {
+//                System.out.println("!!! V-BLANK INTERRUPT REQUESTED !!!");
+            }
         } else if (address >= 0xFF40 && address <= 0xFF4B) {
             ppu.writeRegister(address, data);
         } else if (address >= 0xFF80 && address <= 0xFFFE) {
@@ -102,31 +112,70 @@ public class MMU {
         }else if (address == 0xFF50) {
             // Disable Boot ROM
             if (data != 0) bootRomEnabled = false;
-        } else if (address == 0xFF46) { // DMA Transfer Trigger
+        }
+        if (address < 0x8000) {
+            // Writing to ROM area? This is impossible on Game Boy.
+            // Usually means SP is 0 or uninitialized.
+            System.out.println(String.format("!!! CRITICAL: ILLEGAL WRITE TO ROM [0x%04X] !!! Data: 0x%02X", address, data));
+        }
+        else if (address == 0xFF02) { // Serial Control (SC)
+            // If the game writes 0x81 (Start Transfer + Internal Clock)
+            if ((data & 0x81) == 0x81) {
+
+                // 1. Force "No Connection" (0xFF) in the Data Buffer
+                // This is the signal Tetris needs to see to give up on 2-Player mode.
+                write(0xFF01, 0xFF);
+
+                // 2. Trigger the Serial Interrupt (Bit 3)
+                // This tells the game the "transfer" (of nothing) is finished.
+                int if_reg = read(0xFF0F);
+                write(0xFF0F, if_reg | 0x08);
+
+                // 3. Optional: Print log to confirm it happened
+                // System.out.println("Serial Transfer Handled (Fake Disconnect)");
+            }
+        }
+        else if (address == 0xFF01) {
+
+            //E
+        }
+        else if (address == 0xFF46) { // DMA Transfer Trigger
             int source = data << 8;
-            // The CPU stall handles the timing, but the data copy is "instant"
+
+            // --- DMA DEBUG TRAP START ---
+            System.out.println(String.format("!!! DMA TRIGGERED !!! Source: 0x%04X", source));
+
+            // Check what is actually in WRAM at the source
+            // Tetris normally uses 0xC000. Let's peek at the first sprite's Y coordinate.
+            int firstByte = this.dmaRead(source);
+            System.out.println(String.format(" -> WRAM[Source] Value: 0x%02X (Should be Y-Coordinate)", firstByte));
+            // --- DMA DEBUG TRAP END ---
+
             for (int i = 0; i < 160; i++) {
-                int val = this.read(source + i);
+                int val = this.dmaRead(source + i);
                 ppu.writeOAM(0xFE00 + i, val);
             }
-            this.cpu.setDmaCycles(160); // Stall the CPU for 160 M-cycles
+            this.cpu.setDmaCycles(160);
         }
         else if (address >= 0xA000 && address <= 0xBFFF) {
             cartridge.write(address, data);
         }
         else if (address == 0xFFFF) {
+            System.out.println(String.format("!!! GAME ENABLED INTERRUPTS (IE) !!! Value: 0x%02X", data));
             interuptEnable = data;
+
+            // --- NEW: CATCH THE CULPRIT ---
+            if (data == 0x08) {
+                System.out.println("!!! WARNING: V-BLANK DISABLED (IE=0x08) !!!");
+                System.out.println("Trace:");
+                // This will print exactly where in CPU.java the write came from
+                new Exception().printStackTrace(System.out);
+            }
         }
     }
 
     public int read(int address){
         address &= 0xFFFF;
-
-        // During a DMA transfer, only HRAM is accessible
-        if (cpu.isDmaActive() && (address < 0xFF80 || address > 0xFFFE)) {
-            return 0xFF; // Return garbage
-        }
-
 
         // 1. Boot ROM (Only if enabled and in range 0-255)
         if (bootRomEnabled && address < 0x0100) {
@@ -140,7 +189,7 @@ public class MMU {
         // 3. VRAM
         if (address >= 0x8000 && address <= 0x9FFF) {
             // VRAM Lockout: Block access if PPU is in Mode 3 (Drawing)
-            if (ppu.getMode() == 3) {
+            if (!ppu.isVramAccessible()) {
                 return 0xFF; // CPU reads garbage during lockout
             }
             return ppu.readVRAM(address);
@@ -155,9 +204,7 @@ public class MMU {
         }
         // 6. OAM
         if (address >= 0xFE00 && address <= 0xFE9F) {
-            int mode = ppu.getMode();
-            // OAM Lockout: Block access if PPU is in Mode 2 or Mode 3
-            if (mode == 2 || mode == 3) {
+            if (!ppu.isOamAccessible()) {
                 return 0xFF; // CPU reads garbage during lockout
             }
             return ppu.readOAM(address);
@@ -179,34 +226,80 @@ public class MMU {
         if (address >= 0xFF80 && address <= 0xFFFE) {
             return hram[address - 0xFF80];
         }
+
         // 9. Interrupt Enable Register
         if (address == 0xFFFF) return interuptEnable;
-
+        if (address == 0xFF02) {
+            // Return 0x7E:
+            // Bit 7 (Transfer Flag) is 0 -> Transfer Complete / Not Busy
+            // Bit 0 (Internal Clock) is 0
+            return 0x7E;
+        }
+        else if (address == 0xFF01) {
+            return 0xFF; // ALWAYS return 0xFF (No Link Cable Connected)
+        }
         return 0xFF;
     }
     // In MMU.java
 
-    public void timer_tick(int cycles) {
-        // 1. DIV Register (Divider Register)
-        // DIV increments every 256 cycles (T-cycles)
-        div_counter += cycles;
+    /**
+     * A special read method for the DMA transfer.
+     * This bypasses the PPU memory access restrictions that the CPU is subject to,
+     * as the DMA hardware has a direct bus connection.
+     * It does NOT handle I/O registers or HRAM, as DMA can only source from
+     * Cartridge ROM, WRAM, and Echo RAM.
+     */
+    private int dmaRead(int address) {
+        address &= 0xFFFF;
 
-        // We only update DIV once every 256 cycles, but we need to check if we crossed that threshold multiple times
+        // 1. Cartridge ROM
+        if (address <= 0x7FFF) {
+            return cartridge.read(address);
+        }
+        // 2. WRAM
+        if (address >= 0xC000 && address <= 0xDFFF) {
+            return wram[address - 0xC000];
+        }
+        // 3. Echo RAM
+        if (address >= 0xE000 && address <= 0xFDFF) {
+            return wram[address - 0xE000];
+        }
+        return 0xFF; // Should not happen with valid DMA source addresses
+    }
+
+    public void timer_tick(int cycles) {
+        // Handle the delayed TIMA overflow from the previous cycle
+        if (timaOverflowed) {
+            timaOverflowed = false;
+            TIMA = TMA; // Reset TIMA to the modulo value
+            int if_flag = read(0xFF0F);
+            write(0xFF0F, if_flag | 0x04); // Request a Timer Interrupt
+        }
+
+        // =========================================================
+        // 1. DIV Register (Divider Register) - ALWAYS RUNS
+        // =========================================================
+        // DIV increments every 256 cycles (T-cycles) regardless of TAC.
+        div_counter += cycles;
         while (div_counter >= 256) {
             DIV = (DIV + 1) & 0xFF; // Increment DIV register
             div_counter -= 256;
         }
 
+        // =========================================================
+        // 2. TIMA Register (Timer Counter) - ONLY IF ENABLED
+        // =========================================================
+
         // Check if the Timer is enabled (TAC bit 2)
+        // We return HERE, only after DIV has been updated.
         if ((TAC & 0x04) == 0) return;
 
-        // 2. TIMA Register
         tima_counter += cycles;
 
         // Determine the frequency divisor based on TAC bits 0 & 1
-        int clockDivisor = 0;
+        int clockDivisor = 1024; // Default to avoiding divide by zero
         switch (TAC & 0x03) {
-            case 0b00: clockDivisor = 1024; break; // 4096 Hz
+            case 0b00: clockDivisor = 1024; break; // 4.194304 MHz / 4096 = 1024 cycles
             case 0b01: clockDivisor = 16; break;   // 262144 Hz
             case 0b10: clockDivisor = 64; break;   // 65536 Hz
             case 0b11: clockDivisor = 256; break;  // 16384 Hz
@@ -219,12 +312,21 @@ public class MMU {
 
             if (TIMA > 0xFF) {
                 // TIMA has overflowed!
-                TIMA = TMA; // Reset TIMA to the modulo value
-
-                // Request a Timer Interrupt (Bit 2 of 0xFF0F)
-                int if_flag = read(0xFF0F);
-                write(0xFF0F, if_flag | 0x04);
+                TIMA = 0; // Set to 0 for one cycle
+                timaOverflowed = true; // Schedule the real reset for the next cycle
             }
+        }
+    }
+    public void hack_forceDMATransfer() {
+        // Tetris stores its sprite data at 0xC000 in WRAM.
+        // We will blindly copy 160 bytes from 0xC000 to OAM (0xFE00)
+        // skipping the CPU's permission entirely.
+
+        int source = 0xC000; // Standard Shadow OAM location for Tetris
+
+        for (int i = 0; i < 160; i++) {
+            int val = this.read(source + i); // Read from WRAM
+            ppu.writeOAM(0xFE00 + i, val);   // Write to OAM
         }
     }
 

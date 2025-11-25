@@ -24,12 +24,18 @@ public class CPU {
     private void setDE(int val) { d = (val >> 8) & 0xFF; e = val & 0xFF; }
     private void setHL(int val) { h = (val >> 8) & 0xFF; l = val & 0xFF; }
 
+    private boolean imeScheduled = false;
+
     public void fetchMMU(MMU mmu) { this.mmu = mmu; }
     public void setDmaCycles(int cycles) { // NEW: Setter method
         this.dmaCycles = cycles;
     }
     public boolean isDmaActive() {
         return this.dmaCycles > 0;
+    }
+
+    public boolean isHalted() {
+        return this.isHalted;
     }
 
     public void reset() {
@@ -58,6 +64,8 @@ public class CPU {
         cycles = 0;
         IME = false;
 
+        System.out.println("CPU Reset Complete. PC=" + Integer.toHexString(pc) + " IME=" + IME);
+
         // We also need to set some hardware registers that the Boot ROM normally sets
         mmu.write(0xFF10, 0x80); // Audio
         mmu.write(0xFF11, 0xBF);
@@ -82,31 +90,45 @@ public class CPU {
         mmu.write(0xFF42, 0x00); // SCY
         mmu.write(0xFF43, 0x00); // SCX
         mmu.write(0xFF45, 0x00); // LYC
-        mmu.write(0xFF47, 0xFC); // BGP
-        mmu.write(0xFF48, 0xFF); // OBP0
+        mmu.write(0xFF47, 0x00); // BGP - The official boot ROM leaves this as 0x00.
+        mmu.write(0xFF48, 0xFF); // OBP0 - Official post-boot ROM value
         mmu.write(0xFF49, 0xFF); // OBP1
         mmu.write(0xFF4A, 0x00); // WY
         mmu.write(0xFF4B, 0x00); // WX
-        mmu.write(0xFFFF, 0x17); // 0x01 | 0x04 | 0x10 = 0x15
+        mmu.write(0xFFFF, 0x00); // Interrupt Enable Register (IE) is 0x00 after boot
     }
 
     // --- MAIN STEP FUNCTION ---
     public int step() {
         cycles = 0;
+
+        // 1. Handle DMA Stall (unchanged)
         if (dmaCycles > 0) {
             dmaCycles--;
-            return 4; // Return 4 T-cycles (1 Machine Cycle) for the stall
+            return 4;
         }
+        if (pc == 0x015A || pc == 0x0158) {
+            System.out.println("Stuck in Loop? PC=" + Integer.toHexString(pc) + " LY=" + mmu.read(0xFF44));
+        }
+
+        // 2. Handle Interrupts (Check this BEFORE executing)
         handleInterrupts();
-        if(isHalted){
+
+        // 3. Handle HALT state
+        if (isHalted) {
+            // If halted, we don't fetch opcodes, just burn cycles.
+            // handleInterrupts() above handles the "Wake Up" logic.
             return 4;
         }
 
-        int opcode = mmu.read(pc);
-        // Debug Print: Shows PC, Opcode, and Registers
-//        System.out.println(String.format("PC: %04X  OP: %02X  AF: %04X  BC: %04X  DE: %04X  HL: %04X  %s",
-//                pc, opcode, getAF(), getBC(), getDE(), getHL(), getFlags()));
+        // 4. Update IME (The 1-instruction delay for EI)
+        if (imeScheduled) {
+            IME = true;
+            imeScheduled = false;
+        }
 
+        // 5. Normal Execution
+        int opcode = mmu.read(pc);
         execute(opcode);
 
         return cycles * 4;
@@ -155,23 +177,53 @@ public class CPU {
             case 0x32: { mmu.write(getHL(), a); setHL((getHL() - 1) & 0xFFFF); pc++; cycles = 2; break; } // LD (HL-), A
             case 0x02: { mmu.write(getBC(), a); pc++; cycles = 2; break; } // LD (BC), A
             case 0x12: { mmu.write(getDE(), a); pc++; cycles = 2; break; } // LD (DE), A
-            case 0xC1: { c = mmu.read(sp++); b = mmu.read(sp++); pc++; cycles = 3; break; } // POP BC
+            case 0xC1: { // POP BC
+                c = mmu.read(sp);
+                b = mmu.read(sp + 1);
+                sp += 2;
+                pc++; cycles = 3; break;
+            }
             case 0xC5: { mmu.write(--sp, b); mmu.write(--sp, c); pc++; cycles = 4; break; } // PUSH BC - Correct order is high (B), then low (C)
-            case 0xD1: { e = mmu.read(sp++); d = mmu.read(sp++); pc++; cycles = 3; break; } // POP DE
+            case 0xD1: { // POP DE
+                e = mmu.read(sp);
+                d = mmu.read(sp + 1);
+                sp += 2;
+                pc++; cycles = 3; break;
+            }
             case 0xD5: { mmu.write(--sp, d); mmu.write(--sp, e); pc++; cycles = 4; break; } // PUSH DE - Correct order is high (D), then low (E)
-            case 0xE1: { l = mmu.read(sp++); h = mmu.read(sp++); pc++; cycles = 3; break; } // POP HL
+            case 0xE1: { // POP HL
+                l = mmu.read(sp);
+                h = mmu.read(sp + 1);
+                sp += 2;
+                pc++; cycles = 3; break;
+            }
             case 0xE5: { mmu.write(--sp, h); mmu.write(--sp, l); pc++; cycles = 4; break; } // PUSH HL - Correct order is high (H), then low (L)
 
             // --- Arithmetic ---
             case 0x80: { add(b); pc++; cycles = 1; break; }
             case 0x81: { add(c); pc++; cycles = 1; break; }
+            case 0x83: { add(e); pc++; cycles = 1; break; } // ADD A, E
+            case 0x84: { add(h); pc++; cycles = 1; break; } // ADD A, H
             case 0x85: { // ADD A, L
                 add(l);
                 pc++; cycles = 1; break;
             }
             case 0x87: { add(a); pc++; cycles = 1; break; }
             case 0x90: { sub(b); pc++; cycles = 1; break; }
+            case 0x88: { adc(b); pc++; cycles = 1; break; } // ADC A, B
+            case 0x8A: { adc(d); pc++; cycles = 1; break; } // ADC A, D
+            case 0x8B: { adc(e); pc++; cycles = 1; break; } // ADC A, E
+            case 0x8C: { adc(h); pc++; cycles = 1; break; } // ADC A, H
+            case 0x8F: { adc(a); pc++; cycles = 1; break; } // ADC A, A
+
+            case 0x9A: { sbc(d); pc++; cycles = 1; break; } // SBC A, D
+            case 0x9B: { sbc(e); pc++; cycles = 1; break; } // SBC A, E
+            case 0x9C: { sbc(h); pc++; cycles = 1; break; } // SBC A, H
+            case 0x9D: { sbc(l); pc++; cycles = 1; break; } // SBC A, L
+            case 0x9E: { sbc(mmu.read(getHL())); pc++; cycles = 2; break; } // SBC A, (HL)
+
             case 0x89: { // ADC A, C
+
                 int val = c;
                 int carry = (f & 0x10) != 0 ? 1 : 0;
                 int result = a + val + carry;
@@ -179,7 +231,28 @@ public class CPU {
                 a = result & 0xFF;
                 pc++; cycles = 1; break;
             }
-            case 0xA0: { a &= b; f = (a == 0) ? 0x80 : 0x00 | 0x20; pc++; cycles = 1; break; } // AND B
+            case 0x91: { sub(c); pc++; cycles = 1; break; } // SUB C
+            case 0x93: { sub(e); pc++; cycles = 1; break; } // SUB E
+            case 0x94: { sub(h); pc++; cycles = 1; break; } // SUB H
+            case 0x95: { sub(l); pc++; cycles = 1; break; } // SUB L
+            case 0x97: { sub(a); pc++; cycles = 1; break; } // SUB A
+
+            case 0xA0: { a &= b; f = ((a == 0) ? 0x80 : 0) | 0x20; pc++; cycles = 1; break; } // AND B
+            case 0xA2: { a &= d; f = ((a == 0) ? 0x80 : 0) | 0x20; pc++; cycles = 1; break; } // AND D
+            case 0xA3: { a &= e; f = ((a == 0) ? 0x80 : 0) | 0x20; pc++; cycles = 1; break; } // AND E
+            case 0xA4: { a &= h; f = ((a == 0) ? 0x80 : 0) | 0x20; pc++; cycles = 1; break; } // AND H
+            case 0xA5: { a &= l; f = ((a == 0) ? 0x80 : 0) | 0x20; pc++; cycles = 1; break; } // AND L
+
+            case 0xA6: { // AND (HL)
+                a &= mmu.read(getHL());
+                f = (a == 0 ? 0x80 : 0) | 0x20; // Z set if zero. N=0, H=1, C=0.
+                pc++; cycles = 2; break;
+            }
+
+            case 0xAA: { a ^= d; f = (a == 0) ? 0x80 : 0; pc++; cycles = 1; break; } // XOR D
+            case 0xAB: { a ^= e; f = (a == 0) ? 0x80 : 0; pc++; cycles = 1; break; } // XOR E
+            case 0xAC: { a ^= h; f = (a == 0) ? 0x80 : 0; pc++; cycles = 1; break; } // XOR H
+
             case 0xA8: { a ^= b; f = (a == 0) ? 0x80 : 0x00; pc++; cycles = 1; break; } // XOR B
             case 0xAF: { a = 0; f = 0x80; pc++; cycles = 1; break; } // XOR A
             case 0xB0: { a |= b; f = (a == 0) ? 0x80 : 0x00; pc++; cycles = 1; break; } // OR B
@@ -189,6 +262,34 @@ public class CPU {
                 cp(c);
                 pc++; cycles = 1; break;
             }
+            case 0xBA: { // CP D
+                cp(d);
+                pc++; cycles = 1; break;
+            }
+
+            case 0xBB: { // CP E
+                cp(e);
+                pc++; cycles = 1; break;
+            }
+            case 0xBD: { // CP L
+                cp(l);
+                pc++; cycles = 1; break;
+            }
+
+            case 0xBF: { // CP A
+                cp(a);
+                pc++; cycles = 1; break;
+            }
+
+            case 0xAD: { // XOR L
+                a ^= l;
+                f = (a == 0 ? 0x80 : 0); // Z set if zero. N=0, H=0, C=0.
+                pc++; cycles = 1; break;
+            }
+            case 0x3B: { // DEC SP
+                sp = (sp - 1) & 0xFFFF;
+                pc++; cycles = 2; break;
+            }
             case 0x03: { setBC((getBC() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC BC
             case 0x1B: { // DEC DE
                 setDE((getDE() - 1) & 0xFFFF);
@@ -196,6 +297,11 @@ public class CPU {
             }
             case 0x13: { setDE((getDE() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC DE
             case 0x23: { setHL((getHL() + 1) & 0xFFFF); pc++; cycles = 2; break; } // INC HL
+            case 0x24: { // INC H
+                h = (h + 1) & 0xFF;
+                f = (f & 0x10) | ((h == 0) ? 0x80 : 0) | (((h & 0x0F) == 0) ? 0x20 : 0);
+                pc++; cycles = 1; break;
+            }
             case 0x0C: { // INC C
                 c = (c + 1) & 0xFF;
                 f = (f & 0x10) | ((c == 0) ? 0x80 : 0) | (((c & 0x0F) == 0) ? 0x20 : 0);
@@ -293,8 +399,13 @@ public class CPU {
                 executeCB(cb);
                 break;
             }
-            case 0xF3: { IME = false; pc++; cycles = 1; break; } // DI
-            case 0xFB: { IME = true; pc++; cycles = 1; break; } // EI
+            case 0xF3: { IME = false; imeScheduled = false; pc++; cycles = 1; break; } // DI - Immediate Disable
+            case 0xFB: {
+                System.out.println("!!! EI EXECUTED - MASTER INTERRUPTS ON !!!");
+                imeScheduled = true;
+                pc++;
+                cycles = 1;
+                break; } // EI - Delayed Enable
             case 0x76: { // HALT
                 isHalted = true;
                 pc++;
@@ -304,6 +415,16 @@ public class CPU {
             case 0x3C: { // INC A
                 a = (a + 1) & 0xFF;
                 f = (f & 0x10) | ((a == 0) ? 0x80 : 0) | (((a & 0x0F) == 0) ? 0x20 : 0);
+                pc++; cycles = 1; break;
+            }
+            case 0xB3: { // OR E
+                a |= e;
+                f = (a == 0 ? 0x80 : 0); // Z set if 0, N=0, H=0, C=0
+                pc++; cycles = 1; break;
+            }
+            case 0xB5: { // OR L
+                a |= l;
+                f = (a == 0 ? 0x80 : 0); // Z set if 0, N=0, H=0, C=0
                 pc++; cycles = 1; break;
             }
             case 0xB1: { // OR C
@@ -362,6 +483,21 @@ public class CPU {
                 h = (h - 1) & 0xFF;
                 // Flags: Z, N=1, H. C preserved.
                 f = (f & 0x10) | 0x40 | ((h == 0) ? 0x80 : 0) | (((h & 0x0F) == 0x0F) ? 0x20 : 0);
+                pc++; cycles = 1; break;
+            }
+
+            case 0x8D: { // ADC A, L
+                int val = l;
+                int carry = (f & 0x10) != 0 ? 1 : 0;
+                int result = a + val + carry;
+
+                // Flags: Z, N=0, H, C
+                f = 0;
+                if ((result & 0xFF) == 0) f |= 0x80;
+                if (result > 0xFF) f |= 0x10;
+                if (((a & 0x0F) + (val & 0x0F) + carry) > 0x0F) f |= 0x20;
+
+                a = result & 0xFF;
                 pc++; cycles = 1; break;
             }
 
@@ -508,14 +644,20 @@ public class CPU {
                 pc++; cycles = 2; break;
             }
             case 0xA1: { // AND C
-                a &= c;
-                f = (a == 0 ? 0x80 : 0) | 0x20; // Z set if zero. N=0, H=1, C=0.
+                a &= c; 
+                f = ((a == 0) ? 0x80 : 0) | 0x20; // Z set if zero. N=0, H=1, C=0.
                 pc++; cycles = 1; break;
             }
             case 0xA9: { // XOR C
                 a ^= c;
                 f = (a == 0 ? 0x80 : 0); // Z set if zero. N=0, H=0, C=0.
                 pc++; cycles = 1; break;
+            }
+            case 0xAE: { // XOR (HL)
+                int val = mmu.read(getHL());
+                a ^= val;
+                f = (a == 0 ? 0x80 : 0); // Z set if zero. N=0, H=0, C=0.
+                pc++; cycles = 2; break;
             }
             case 0xE9: { // JP (HL) (Jump to HL)
                 pc = getHL();
@@ -575,6 +717,10 @@ public class CPU {
             }
             case 0x72: { // LD (HL), D
                 mmu.write(getHL(), d);
+                pc++; cycles = 2; break;
+            }
+            case 0x74: { // LD (HL), H
+                mmu.write(getHL(), h);
                 pc++; cycles = 2; break;
             }
             case 0xB7: { // OR A
@@ -651,7 +797,10 @@ public class CPU {
                 setHL(result & 0xFFFF);
                 pc += 2; cycles = 3; break;
             }
-
+            case 0xF9: { // LD SP, HL
+                sp = getHL();
+                pc++; cycles = 2; break;
+            }
             case 0xD9: { // RETI (Return from Interrupt)
                 // 1. Pop PC from the stack (same as RET)
                 int lo = mmu.read(sp++);
@@ -719,13 +868,36 @@ public class CPU {
                 pc += 3; cycles = 5; break; // 20 T-cycles
             }
             case 0x44: { b = h; pc++; cycles = 1; break; } // LD B, H (Assuming you meant LD B, H as the 40-47 range is all LD)
+            case 0x4B: { c = e; pc++; cycles = 1; break; } // LD C, E
+            case 0x4C: { c = h; pc++; cycles = 1; break; } // LD C, H
             case 0x4D: { c = l; pc++; cycles = 1; break; } // LD C, L
             case 0x50: { d = b; pc++; cycles = 1; break; } // LD D, B
+            case 0x51: { d = c; pc++; cycles = 1; break; } // LD D, C
+            case 0x52: { pc++; cycles = 1; break; } // LD D, D (NOP)
+            case 0x53: { d = e; pc++; cycles = 1; break; } // LD D, E
+            case 0x55: { d = l; pc++; cycles = 1; break; } // LD D, L
+            case 0x41: { b = c; pc++; cycles = 1; break; } // LD B, C
+            case 0x42: { b = d; pc++; cycles = 1; break; } // LD B, D
+            case 0x43: { b = e; pc++; cycles = 1; break; } // LD B, E
+            case 0x45: { b = l; pc++; cycles = 1; break; } // LD B, L
+            case 0x48: { c = b; pc++; cycles = 1; break; } // LD C, B
             case 0x54: { d = h; pc++; cycles = 1; break; } // LD D, H
+            case 0x5A: { e = d; pc++; cycles = 1; break; } // LD E, D
+            case 0x5B: { pc++; cycles = 1; break; } // LD E, E (NOP)
+            case 0x5C: { e = h; pc++; cycles = 1; break; } // LD E, H
             case 0x59: { e = c; pc++; cycles = 1; break; } // LD E, C
             case 0x5D: { e = l; pc++; cycles = 1; break; } // LD E, L
             case 0x73: { mmu.write(getHL(), e); pc++; cycles = 2; break; } // LD (HL), E
 
+            case 0x75: { // LD (HL), L
+                mmu.write(getHL(), l);
+                pc++;
+                cycles = 2; // 8 T-cycles
+                break;
+            }
+            case 0x49: { pc++; cycles = 1; break; } // LD C, C (NOP)
+            case 0x64: { pc++; cycles = 1; break; } // LD H, H (NOP)
+            case 0x6D: { pc++; cycles = 1; break; } // LD L, L (NOP)
             case 0xFD: { // Illegal Opcode (Treat as NOP)
                 pc++; cycles = 1; break; // Skip the byte
             }
@@ -757,25 +929,24 @@ public class CPU {
                 pc++; cycles = 1; break;
             }
             case 0x27: { // DAA (Decimal Adjust Accumulator)
-                int result = a;
                 int correction = 0;
-                boolean wasSub = (f & 0x40) != 0;
-                boolean carry = (f & 0x10) != 0;
+                boolean nFlag = (f & 0x40) != 0;
+                boolean hFlag = (f & 0x20) != 0;
+                boolean cFlag = (f & 0x10) != 0;
 
-                if ((f & 0x20) != 0 || (!wasSub && (result & 0x0F) > 9)) {
-                    correction |= 0x06;
+                if (hFlag || (!nFlag && (a & 0x0F) > 9)) {
+                    correction = 0x06;
                 }
-                if (carry || (!wasSub && result > 0x99)) {
+
+                if (cFlag || (!nFlag && a > 0x99)) {
                     correction |= 0x60;
                     f |= 0x10; // Set carry flag
                 }
 
-                result += wasSub ? -correction : correction;
-                a = result & 0xFF;
+                a += nFlag ? -correction : correction;
+                a &= 0xFF;
 
-                // Flags: Z is set if result is 0. H is cleared. N is not affected. C is set/preserved.
-                f &= 0x50; // Preserve N and C, clear Z and H
-                if (a == 0) f |= 0x80;
+                f = (f & 0x40) | (a == 0 ? 0x80 : 0) | (f & 0x10); // Preserve N, set Z, clear H, preserve/set C
                 pc++; cycles = 1; break;
             }
             case 0x6B: { // LD L, E
@@ -788,6 +959,10 @@ public class CPU {
             }
             case 0x69: { // LD L, C
                 l = c;
+                pc++; cycles = 1; break;
+            }
+            case 0x4A: { // LD C, D
+                c = d;
                 pc++; cycles = 1; break;
             }
             case 0x6A: { // LD L, D
@@ -924,6 +1099,21 @@ public class CPU {
                 } else {
                     pc += 3;
                     cycles = 3; // Not taken: 12 T-cycles
+                }
+                break;
+            }
+            case 0xCC: { // CALL Z, a16
+                int addr = (mmu.read(pc + 2) << 8) | mmu.read(pc + 1);
+
+                if ((f & 0x80) != 0) { // If Z is SET
+                    int ret = pc + 3;
+                    mmu.write(--sp, (ret >> 8) & 0xFF);
+                    mmu.write(--sp, ret & 0xFF);
+                    pc = addr;
+                    cycles = 6; // Taken: 24 T-cycles
+                } else {
+                    pc += 3;
+                    cycles = 3; // Not Taken: 12 T-cycles
                 }
                 break;
             }
@@ -1180,6 +1370,21 @@ public class CPU {
                 (((a & 0xF) < (val & 0xF)) ? 0x20 : 0);
     }
 
+    private void adc(int val) {
+        int carry = (f & 0x10) != 0 ? 1 : 0;
+        int result = a + val + carry;
+        f = ((result & 0xFF) == 0 ? 0x80 : 0) | (result > 0xFF ? 0x10 : 0) | (((a & 0x0F) + (val & 0x0F) + carry) > 0x0F ? 0x20 : 0);
+        a = result & 0xFF;
+    }
+
+    private void sbc(int val) {
+        int carry = (f & 0x10) != 0 ? 1 : 0;
+        int result = a - val - carry;
+        f = 0x40 | ((result & 0xFF) == 0 ? 0x80 : 0) | (result < 0 ? 0x10 : 0) | (((a & 0x0F) - (val & 0x0F) - carry) < 0 ? 0x20 : 0);
+        a = result & 0xFF;
+    }
+
+
     private void addHL(int value) {
         int hl = getHL();
         int result = hl + value;
@@ -1204,35 +1409,46 @@ public class CPU {
     private void handleInterrupts() {
         int requested = mmu.read(0xFF0F);
         int enabled = mmu.read(0xFFFF);
-        int pending = requested & enabled; // Which interrupts are both requested AND enabled?
+        int pending = requested & enabled;
+
+        if ((requested & 1) != 0) {
+            // Use a static counter to prevent console flood (define 'debugLogLimit' in class if needed, or just print once)
+            // For now, let's just print it. The output will be fast, but readable at the end.
+            if (!IME || pending == 0) {
+                System.out.println(String.format("INT IGNORED: IME=%b | IE=0x%02X | IF=0x%02X | Pending=0x%02X",
+                        IME, enabled, requested, pending));
+            }
+        }
 
         if (pending != 0) {
-            // If any interrupt is pending, wake up the CPU (Exit HALT state)
             isHalted = false;
 
             if (IME) {
-                // Find the highest priority interrupt (lowest bit number)
                 int vector = 0;
                 int bitMask = 0;
 
-                if ((pending & 0x01) != 0) { vector = 0x0040; bitMask = 0x01; } // V-Blank
+                if ((pending & 0x01) != 0)      { vector = 0x0040; bitMask = 0x01; } // V-Blank
                 else if ((pending & 0x02) != 0) { vector = 0x0048; bitMask = 0x02; } // LCD STAT
                 else if ((pending & 0x04) != 0) { vector = 0x0050; bitMask = 0x04; } // Timer
                 else if ((pending & 0x08) != 0) { vector = 0x0058; bitMask = 0x08; } // Serial
                 else if ((pending & 0x10) != 0) { vector = 0x0060; bitMask = 0x10; } // Joypad
-                
-                if (vector == 0) return; // Should not happen if pending is not 0
 
-                IME = false;
-                // Clear the specific interrupt flag that is being handled
-                mmu.write(0xFF0F, requested & ~bitMask);
+                if (vector != 0) {
+                    System.out.println(String.format("!!! INTERRUPT FIRED !!! Vector=0x%04X | PC=0x%04X | SP=0x%04X", vector, pc, sp));
 
-                mmu.write(--sp, (pc >> 8) & 0xFF);
-                mmu.write(--sp, pc & 0xFF);
+                    IME = false;
+                    // Ack the interrupt
+                    mmu.write(0xFF0F, requested & ~bitMask);
 
-                // Jump to interrupt vector
-                pc = vector;
-                cycles += 5; // Add extra cycles for interrupt processing
+                    // Push PC
+                    mmu.write(--sp, (pc >> 8) & 0xFF);
+                    mmu.write(--sp, pc & 0xFF);
+
+                    // Jump
+                    pc = vector;
+                    cycles += 5;
+
+                }
             }
         }
     }

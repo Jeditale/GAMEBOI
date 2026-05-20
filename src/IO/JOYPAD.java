@@ -36,16 +36,16 @@ public class JOYPAD implements KeyListener , Serializable {
      * CPU reads 0xFF00 to get the button states.
      */
     public int read() {
-        int result = 0xCF; // Top bits are usually 1
+        int result = 0xC0 | (joypadReg & 0x30) | 0x0F;
 
         // If Bit 4 is 0, CPU wants Direction Keys
         if ((joypadReg & 0x10) == 0) {
-            result &= directionButtons;
+            result &= (directionButtons | 0xF0);
         }
 
         // If Bit 5 is 0, CPU wants Action Keys
         if ((joypadReg & 0x20) == 0) {
-            result &= actionButtons;
+            result &= (actionButtons | 0xF0);
         }
 
         return result;

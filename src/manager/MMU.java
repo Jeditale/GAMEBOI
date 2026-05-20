@@ -83,8 +83,28 @@ public class MMU implements java.io.Serializable{
                 ppu.writeVRAM(address, data);
             }
         } else if (address >= 0xC000 && address <= 0xDFFF) {
+            if (address == 0xD6FE) {
+                if (cpu != null) {
+                    System.out.println(String.format("MMU Write [0xD6FE] = 0x%02X | CPU PC: 0x%04X | ROM Bank: %d | A: 0x%02X | BC: 0x%04X | DE: 0x%04X | HL: 0x%04X | SP: 0x%04X",
+                            data, cpu.getRegPC(), cartridge != null ? cartridge.getRomBank() : 0,
+                            cpu.getRegA(), (cpu.getRegB() << 8) | cpu.getRegC(),
+                            (cpu.getRegD() << 8) | cpu.getRegE(), (cpu.getRegH() << 8) | cpu.getRegL(), cpu.getRegSP()));
+                } else {
+                    System.out.println(String.format("MMU Write [0xD6FE] = 0x%02X | CPU: null", data));
+                }
+            }
+            if (address == 0xDB5A || address == 0xDB5B || address == 0xFB5A || address == 0xFB5B) {
+                System.out.println(String.format("MMU Write [0x%04X] = 0x%02X | CPU PC: 0x%04X", address, data, cpu != null ? cpu.getRegPC() : 0));
+            }
+
+            if (address - 0xC000 == 0x1B5B) {
+                System.out.println("wram[0x1B5B] written with " + data + " at PC " + (cpu != null ? String.format("0x%04X", cpu.getRegPC()) : "null"));
+            }
             wram[address - 0xC000] = data;
         } else if (address >= 0xE000 && address <= 0xFDFF) {
+            if (address - 0xE000 == 0x1B5B) {
+                System.out.println("wram[0x1B5B] written (ECHO) with " + data + " at PC " + (cpu != null ? String.format("0x%04X", cpu.getRegPC()) : "null"));
+            }
             wram[address - 0xE000] = data;
         } else if (address == 0xFF04) {
             DIV = 0;
@@ -186,7 +206,15 @@ public class MMU implements java.io.Serializable{
         if (address <= 0x7FFF) {
             return cartridge.read(address);
         }
-        // 3. VRAM
+        
+        // 3. Cartridge RAM (0xA000 - 0xBFFF)
+        if (address >= 0xA000 && address <= 0xBFFF) {
+            int val = cartridge.read(address);
+            System.out.println(String.format("MMU SRAM Read [0x%04X] = 0x%02X | CPU PC: 0x%04X", address, val, cpu != null ? cpu.getRegPC() : 0));
+            return val;
+        }
+
+        // 4. VRAM
         if (address >= 0x8000 && address <= 0x9FFF) {
             // VRAM Lockout: Block access if PPU is in Mode 3 (Drawing)
             if (!ppu.isVramAccessible()) {
@@ -196,7 +224,12 @@ public class MMU implements java.io.Serializable{
         }
         // 4. WRAM
         if (address >= 0xC000 && address <= 0xDFFF) {
-            return wram[address - 0xC000];
+            int val = wram[address - 0xC000];
+            if (address == 0xDB5A || address == 0xDB5B || address == 0xFB5A || address == 0xFB5B) {
+                System.out.println(String.format("MMU Read [0x%04X] = 0x%02X | CPU PC: 0x%04X", address, val, cpu != null ? cpu.getRegPC() : 0));
+            }
+
+            return val;
         }
         // 5. Echo RAM
         if (address >= 0xE000 && address <= 0xFDFF) {

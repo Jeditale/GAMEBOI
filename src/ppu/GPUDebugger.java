@@ -12,6 +12,11 @@ public class GPUDebugger extends JPanel {
     // Palette for the debugger: White, Light Gray, Dark Gray, Black
     private final int[] PALETTE = {0xFFFFFF, 0xC0C0C0, 0x606060, 0x000000};
 
+    // FPS Counters
+    private long lastTime = System.currentTimeMillis();
+    private int frames = 0;
+    private int currentFps = 0;
+
     public GPUDebugger(PPU ppu) {
         this.ppu = ppu;
         this.setPreferredSize(new Dimension(500, 600));
@@ -38,12 +43,25 @@ public class GPUDebugger extends JPanel {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
 
+        // --- FPS CALCULATION START ---
+        frames++;
+        if (System.currentTimeMillis() - lastTime >= 1000) {
+            currentFps = frames;
+            frames = 0;
+            lastTime = System.currentTimeMillis();
+        }
+        // --- FPS CALCULATION END ---
+
         // 1. Draw VRAM Tiles (0x8000 - 0x97FF)
         // We draw 16 tiles per row, scaled 2x
         g2.scale(2.0, 2.0);
 
         g2.setColor(Color.BLUE);
         g2.drawString("Tile Data (0x8000-0x97FF)", 5, 10);
+
+        // Draw FPS in Top Right (Red so it stands out)
+        g2.setColor(Color.RED);
+        g2.drawString("FPS: " + currentFps, 200, 10);
 
         int xDraw = 0;
         int yDraw = 15; // Start below text

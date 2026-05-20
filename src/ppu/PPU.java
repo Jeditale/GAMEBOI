@@ -14,6 +14,8 @@ public class PPU implements java.io.Serializable{
     private boolean frameReady = false;
     private boolean debugSpriteLogShown = false;
     private int debugFrameCounter = 0;
+    private int windowLine = 0;
+
 
 
 
@@ -147,6 +149,9 @@ public class PPU implements java.io.Serializable{
             if (ly > 153) {
                 ly = 0;
             }
+            if (ly == 0) {
+                windowLine = 0;
+            }
         }
     }
 
@@ -173,6 +178,7 @@ public class PPU implements java.io.Serializable{
         }
     }
 
+    //reworked
     private void renderBackground() {
         int mapBase = (lcdc & 0x08) == 0 ? 0x9800 : 0x9C00; // BG Tile Map Select
         int dataBase = (lcdc & 0x10) != 0 ? 0x8000 : 0x9000; // BG & Window Tile Data Select
@@ -247,50 +253,34 @@ public class PPU implements java.io.Serializable{
         }
     }
 
-    // Stub functions for Window and Sprites
-    // These are complex and should be implemented next
+
+
     private void renderWindow() {
-        // Check if the Window is enabled and positioned on the current line (ly)
-        // LCDC Bit 5: Window Display Enable
-        if ((lcdc & 0x20) == 0 || ly < wy) {
-            return;
-        }
+        // 1. Standard Checks
+        if ((lcdc & 0x20) == 0) return; // Window disabled
+        if (ly < wy) return;            // Current line is above the window
+        if (wx > 166) return;           // Window is off-screen
 
-        // Window X position is WX - 7
+        // 2. Setup (Same as before)
         int windowXStart = wx - 7;
-
-        // LCDC Bit 6: Window Tile Map Select (0=9800-9BFF, 1=9C00-9FFF)
         int mapBase = (lcdc & 0x40) == 0 ? 0x9800 : 0x9C00;
-
-        // LCDC Bit 4: BG/Window Tile Data Select (0=8800-97FF, 1=8000-8FFF)
         int dataBase = (lcdc & 0x10) != 0 ? 0x8000 : 0x9000;
         boolean signedTileIndex = (dataBase == 0x9000);
 
-        // Window Y coordinate relative to the top of the window (0-143)
-        int windowY = ly - wy;
-
-        // Which tile row are we in? (0-31)
-        int tileRow = (windowY / 8) & 0x1F;
-
-        // Which line of pixels within that tile are we on? (0-7)
-        int tileLine = windowY % 8;
+        // 3. USE THE INTERNAL COUNTER (The "Zelda Fix" is now the standard)
+        // We use 'windowLine' instead of 'ly - wy'
+        int tileRow = (windowLine / 8) & 0x1F;
+        int tileLine = windowLine % 8;
 
         for (int x = 0; x < 160; x++) {
-            // Only draw if the pixel is within the horizontal bounds of the window
             if (x >= windowXStart) {
-
-                // Window X coordinate relative to the start of the window (0-159)
                 int windowX = x - windowXStart;
-
-                // Which tile column are we in? (0-31)
                 int tileCol = (windowX / 8) & 0x1F;
 
-                // --- Tile Fetching ---
+                // Fetch Tile & Data
                 int tileMapAddress = mapBase + (tileRow * 32) + tileCol;
                 int tileNum = vram[tileMapAddress - 0x8000];
 
-                // Adjust tile number for signed addressing mode
-                // Get the address of the tile's pattern data
                 int tileAddr;
                 if (signedTileIndex) {
                     tileAddr = dataBase + ((byte) tileNum * 16);
@@ -299,28 +289,100 @@ public class PPU implements java.io.Serializable{
                 }
 
                 int lineAddr = tileAddr + (tileLine * 2);
-                
-                // Read tile data directly from VRAM array
                 int data1 = vram[lineAddr - 0x8000];
                 int data2 = vram[lineAddr + 1 - 0x8000];
 
-                // Which bit in the bytes represents our current pixel?
+                // Decode Color
                 int bitIndex = 7 - (windowX % 8);
                 int bitMask = (1 << bitIndex);
-
-                // --- Color Calculation ---
                 int colorBit1 = (data2 & bitMask) > 0 ? 1 : 0;
                 int colorBit0 = (data1 & bitMask) > 0 ? 1 : 0;
                 int colorId = (colorBit1 << 1) | colorBit0;
 
-                // Use the Background Palette (BGP) for the Window Layer
-                int shade = (bgp >> (colorId * 2)) & 0x03;
-
-                // Set the pixel in the screen buffer
-                screen[ly][x] = shade;
+                screen[ly][x] = (bgp >> (colorId * 2)) & 0x03;
             }
         }
+
+        // 4. CRITICAL: Increment the counter only because we actually drew a line
+        windowLine++;
     }
+
+
+
+
+    //old render modes
+//    private void renderWindow() {
+//        // Check if the Window is enabled and positioned on the current line (ly)
+//        // LCDC Bit 5: Window Display Enable
+//        if ((lcdc & 0x20) == 0 || ly < wy) {
+//            return;
+//        }
+//
+//        // Window X position is WX - 7
+//        int windowXStart = wx - 7;
+//
+//        // LCDC Bit 6: Window Tile Map Select (0=9800-9BFF, 1=9C00-9FFF)
+//        int mapBase = (lcdc & 0x40) == 0 ? 0x9800 : 0x9C00;
+//
+//        // LCDC Bit 4: BG/Window Tile Data Select (0=8800-97FF, 1=8000-8FFF)
+//        int dataBase = (lcdc & 0x10) != 0 ? 0x8000 : 0x9000;
+//        boolean signedTileIndex = (dataBase == 0x9000);
+//
+//        // Window Y coordinate relative to the top of the window (0-143)
+//        int windowY = ly - wy;
+//
+//        // Which tile row are we in? (0-31)
+//        int tileRow = (windowY / 8) & 0x1F;
+//
+//        // Which line of pixels within that tile are we on? (0-7)
+//        int tileLine = windowY % 8;
+//
+//        for (int x = 0; x < 160; x++) {
+//            // Only draw if the pixel is within the horizontal bounds of the window
+//            if (x >= windowXStart) {
+//
+//                // Window X coordinate relative to the start of the window (0-159)
+//                int windowX = x - windowXStart;
+//
+//                // Which tile column are we in? (0-31)
+//                int tileCol = (windowX / 8) & 0x1F;
+//
+//                // --- Tile Fetching ---
+//                int tileMapAddress = mapBase + (tileRow * 32) + tileCol;
+//                int tileNum = vram[tileMapAddress - 0x8000];
+//
+//                // Adjust tile number for signed addressing mode
+//                // Get the address of the tile's pattern data
+//                int tileAddr;
+//                if (signedTileIndex) {
+//                    tileAddr = dataBase + ((byte) tileNum * 16);
+//                } else {
+//                    tileAddr = dataBase + (tileNum * 16);
+//                }
+//
+//                int lineAddr = tileAddr + (tileLine * 2);
+//
+//                // Read tile data directly from VRAM array
+//                int data1 = vram[lineAddr - 0x8000];
+//                int data2 = vram[lineAddr + 1 - 0x8000];
+//
+//                // Which bit in the bytes represents our current pixel?
+//                int bitIndex = 7 - (windowX % 8);
+//                int bitMask = (1 << bitIndex);
+//
+//                // --- Color Calculation ---
+//                int colorBit1 = (data2 & bitMask) > 0 ? 1 : 0;
+//                int colorBit0 = (data1 & bitMask) > 0 ? 1 : 0;
+//                int colorId = (colorBit1 << 1) | colorBit0;
+//
+//                // Use the Background Palette (BGP) for the Window Layer
+//                int shade = (bgp >> (colorId * 2)) & 0x03;
+//
+//                // Set the pixel in the screen buffer
+//                screen[ly][x] = shade;
+//            }
+//        }
+//    }
 
     /**
      * Scans OAM during Mode 2 to find up to 10 sprites visible on the current scanline (ly).
@@ -430,7 +492,6 @@ public class PPU implements java.io.Serializable{
                     if (bgEnabled && (s.attributes & 0x80) != 0 && bgLineBuffer[x] != 0) {
                         continue;
                     }
-                    screen[ly][x] = 3;
                     int palette = ((s.attributes & 0x10) != 0) ? obp1 : obp0;
                     screen[ly][x] = (palette >> (colorId * 2)) & 0x03;
 
@@ -505,8 +566,7 @@ public class PPU implements java.io.Serializable{
     }
 
     public boolean isVramAccessible() {
-        // VRAM is only accessible during modes 0, 1, and 2. It is inaccessible during mode 3 (Drawing).
-        return mode != 3;
+        return true;
     }
 
     public boolean isOamAccessible() {
@@ -524,11 +584,14 @@ public class PPU implements java.io.Serializable{
     public int readRegister(int address) {
         switch (address) {
             case 0xFF40: return this.lcdc;
-            case 0xFF41:
-                // Combine read-only mode bits with read/write interrupt bits
-                int currentStat = (stat & 0xFC); // Keep writable bits, clear mode/lyc
-                currentStat |= (mode & 0x03); // Set mode bits
-                if (ly == lyc) currentStat |= 0x04; // Set LYC coincidence flag
+            case 0xFF41: // STAT
+                // 1. Clear the old mode bits (Bits 0-1) and LYC bit (Bit 2)
+                int currentStat = this.stat & 0x78;
+
+                // 2. Inject the REAL hardware status
+                currentStat |= (this.mode & 0x03);       // Current PPU Mode
+                if (ly == lyc) currentStat |= 0x04;      // LY == LYC Coincidence
+
                 return currentStat | 0x80; // Bit 7 is always 1
             case 0xFF42: return this.scy;
             case 0xFF43: return this.scx;
@@ -561,6 +624,15 @@ public class PPU implements java.io.Serializable{
                     this.ly = 0;
                     this.cycle = 4; // The PPU doesn't start at cycle 0 when turned on. This aligns with hardware behavior.
                     this.mode = 2; // Start in OAM Scan
+                }
+                if (!isNowEnabled && wasEnabled) {
+                    // LCD OFF
+                    this.ly = 0;
+                    this.windowLine = 0; // Reset
+                } else if (isNowEnabled && !wasEnabled) {
+                    // LCD ON
+                    this.ly = 0;
+                    this.windowLine = 0; // Reset
                 }
                 break;
             case 0xFF41:

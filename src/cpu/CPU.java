@@ -24,6 +24,17 @@ public class CPU implements java.io.Serializable {
     private void setDE(int val) { d = (val >> 8) & 0xFF; e = val & 0xFF; }
     private void setHL(int val) { h = (val >> 8) & 0xFF; l = val & 0xFF; }
 
+    public int getRegA() { return a; }
+    public int getRegF() { return f; }
+    public int getRegB() { return b; }
+    public int getRegC() { return c; }
+    public int getRegD() { return d; }
+    public int getRegE() { return e; }
+    public int getRegH() { return h; }
+    public int getRegL() { return l; }
+    public int getRegSP() { return sp; }
+    public int getRegPC() { return pc; }
+
     private boolean imeScheduled = false;
 
     public void fetchMMU(MMU mmu) { this.mmu = mmu; }
@@ -62,6 +73,7 @@ public class CPU implements java.io.Serializable {
         pc = 0x0100; // Jump directly to the Game Cartridge Entry Point
 
         cycles = 0;
+        mmu.write(0xFF0F, 0x00);
         IME = false;
 
         System.out.println("CPU Reset Complete. PC=" + Integer.toHexString(pc) + " IME=" + IME);
